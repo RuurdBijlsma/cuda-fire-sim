@@ -3,6 +3,8 @@
 #include "main.h"
 #include <curand.h>
 #include <curand_kernel.h>
+#include <string>
+#include <boost/python.hpp>
 
 __global__ void setup_kernel(curandState *state) {
     unsigned int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -236,13 +238,14 @@ int findBestThreadCount() {
     return bestN;
 }
 
-int main() {
-    int nThreads = findBestThreadCount();
+namespace python = boost::python;
 
-//    auto sim = Simulation(W, H, nThreads);
-//    for (int i = 0; i < 50; i++) {
-//        printf("----------- ITERATION %i -----------\n", i + 1);
-//        sim.tick(true);
-//    }
-    return 0;
+int test() {
+    return 5;
+}
+//TODO
+//DIT MOET MAAR ZONDER NUMPY EN MET EEN STRING / python datatype
+
+BOOST_PYTHON_MODULE (cuda_python) {
+    python::def("test", test);
 }
