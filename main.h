@@ -8,6 +8,7 @@ struct Params {
     float burnRate;
     float heightEffectMultiplierUp;
     float heightEffectMultiplierDown;
+    float windEffectMultiplier;
     float activityThreshold;
     float spreadSpeed;
     float deathRate;

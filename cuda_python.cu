@@ -5,6 +5,7 @@
 #include <curand_kernel.h>
 #include <string>
 #include <boost/python.hpp>
+#include <boost/python/numpy.hpp>
 
 __global__ void setup_kernel(curandState *state) {
     unsigned int idx = threadIdx.x + blockDim.x * blockIdx.x;
@@ -41,7 +42,7 @@ __global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCo
             unsigned int nI = nY * width + nX;
             // ------ WIND ------
             // Fire activity from neighbour cell counts more if wind comes from there
-            activityGrid[dirIndex] = board[nI].fireActivity * params.windMatrix[dirIndex];
+            activityGrid[dirIndex] = board[nI].fireActivity * (1 + params.windMatrix[dirIndex] * params.windEffectMultiplier);
             // ------ HEIGHT ------
             // Same but for height, going down decreases activity spread, going up increases it
             float heightDifference = cell.height - board[nI].height;
@@ -50,7 +51,7 @@ __global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCo
             heightDifference *= heightDifference > 0 ?
                                 params.heightEffectMultiplierUp :
                                 params.heightEffectMultiplierDown;
-            activityGrid[dirIndex] = activityGrid[dirIndex] * heightDifference + 1;
+            activityGrid[dirIndex] = activityGrid[dirIndex] * (heightDifference + 1);
         }
     }
     float activitySum = 0;
@@ -98,6 +99,7 @@ public:
         params = {
                 .1,
                 2,
+                1,
                 1,
                 .2,
                 1.5,
@@ -238,14 +240,57 @@ int findBestThreadCount() {
     return bestN;
 }
 
-namespace python = boost::python;
+//namespace python = boost::python;
+//
+///// @brief Construct list with `n` elements.  each element is a copy
+/////        of `value`.
+///// @param n Iniitail container size.
+///// @param item Item with which to fill the container.
+//python::list make_list(
+//        const std::size_t n,
+//        const python::object &item = python::object()) {
+//    python::list result;
+//    result.append(item);
+//    result *= n;
+//    return result;
+//}
+//
+//template<typename T>
+//inline
+//std::vector<T> to_std_vector(const python::object &iterable) {
+//    return std::vector<T>(python::stl_input_iterator<T>(iterable),
+//                          python::stl_input_iterator<T>());
+//}
 
-int test() {
-    return 5;
-}
-//TODO
-//DIT MOET MAAR ZONDER NUMPY EN MET EEN STRING / python datatype
 
-BOOST_PYTHON_MODULE (cuda_python) {
-    python::def("test", test);
+int main() {
+    auto vec = new std::vector<std::string>();
+    vec->push_back("hello");
+    vec->push_back("hello1");
+    vec->push_back("hello2");
+    vec->push_back("hello3");
+//    auto l = python::list();
+//    auto listLen = len(l);
+    printf("Length of l is");
+    python::str a = python::str("hello");
+
+    printf("Hellll");
+
+    return 0;
 }
+
+//double test(python::list &x) {
+//    auto vec = to_std_vector<python::object>(x);
+//    double sum = 0;
+//    for (const auto &s: vec) {
+//        double a = python::extract<double>(s);
+//        sum += a;
+//    }
+//    return sum;
+//}
+////TODO
+////DIT MOET MAAR ZONDER NUMPY EN MET EEN STRING / python datatype
+//
+//BOOST_PYTHON_MODULE (cuda_python) {
+//    python::def("test", test);
+//}
