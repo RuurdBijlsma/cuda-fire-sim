@@ -1,9 +1,7 @@
+#include <boost/python/numpy.hpp>
 #include <boost/scoped_array.hpp>
 #include <iostream>
-#define BOOST_PYTHON_STATIC_LIB
-#define BOOST_LIB_NAME "boost_numpy39"
-#include <boost/config/auto_link.hpp>
-#include <boost/python/numpy.hpp>
+#include <bits/stdc++.h>
 
 using namespace std;
 namespace p = boost::python;
