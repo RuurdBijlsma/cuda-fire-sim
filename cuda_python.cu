@@ -42,7 +42,8 @@ __global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCo
             unsigned int nI = nY * width + nX;
             // ------ WIND ------
             // Fire activity from neighbour cell counts more if wind comes from there
-            activityGrid[dirIndex] = board[nI].fireActivity * (1 + params.windMatrix[dirIndex] * params.windEffectMultiplier);
+            activityGrid[dirIndex] =
+                    board[nI].fireActivity * (1 + params.windMatrix[dirIndex] * params.windEffectMultiplier);
             // ------ HEIGHT ------
             // Same but for height, going down decreases activity spread, going up increases it
             float heightDifference = cell.height - board[nI].height;
@@ -240,57 +241,47 @@ int findBestThreadCount() {
     return bestN;
 }
 
-//namespace python = boost::python;
-//
-///// @brief Construct list with `n` elements.  each element is a copy
-/////        of `value`.
-///// @param n Iniitail container size.
-///// @param item Item with which to fill the container.
-//python::list make_list(
-//        const std::size_t n,
-//        const python::object &item = python::object()) {
-//    python::list result;
-//    result.append(item);
-//    result *= n;
-//    return result;
-//}
-//
-//template<typename T>
-//inline
-//std::vector<T> to_std_vector(const python::object &iterable) {
-//    return std::vector<T>(python::stl_input_iterator<T>(iterable),
-//                          python::stl_input_iterator<T>());
-//}
+void count_and_sum(double *array, int num, double output[]) {
+    double sum = 0.0;
 
+    for (int i = 0; i < num; ++i) {
+        sum += array[i];
+    }
 
-int main() {
-    auto vec = new std::vector<std::string>();
-    vec->push_back("hello");
-    vec->push_back("hello1");
-    vec->push_back("hello2");
-    vec->push_back("hello3");
-//    auto l = python::list();
-//    auto listLen = len(l);
-    printf("Length of l is");
-    python::str a = python::str("hello");
-
-    printf("Hellll");
-
-    return 0;
+    // Set output values
+    output[0] = sum;
+    output[1] = (double) num;
 }
 
-//double test(python::list &x) {
-//    auto vec = to_std_vector<python::object>(x);
-//    double sum = 0;
-//    for (const auto &s: vec) {
-//        double a = python::extract<double>(s);
-//        sum += a;
-//    }
-//    return sum;
-//}
-////TODO
-////DIT MOET MAAR ZONDER NUMPY EN MET EEN STRING / python datatype
-//
-//BOOST_PYTHON_MODULE (cuda_python) {
-//    python::def("test", test);
-//}
+namespace p = boost::python;
+namespace np = boost::python::numpy;
+
+np::ndarray wrap_count_and_sum(np::ndarray const &array) {
+
+    // Make sure we get doubles
+    if (array.get_dtype() != np::dtype::get_builtin<double>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect array data type");
+        p::throw_error_already_set();
+    }
+
+    // Could also pass back a vector, but unsure if you use C++ or C
+    static double output[3]; // the static here is important, keeps it around!
+    count_and_sum(reinterpret_cast<double *>(array.get_data()), array.shape(0), output);
+
+    // test CUDA
+    output[2] = findBestThreadCount();
+
+    // Turning the output into a numpy array
+    np::dtype dt = np::dtype::get_builtin<double>();
+    p::tuple shape = p::make_tuple(3); // It has shape (2,)
+    p::tuple stride = p::make_tuple(sizeof(double)); // 1D array, so its just size of double
+    np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
+    return result;
+
+}
+
+BOOST_PYTHON_MODULE (cuda_python) {  // Thing in brackets should match output library name
+    Py_Initialize();
+    np::initialize();
+    p::def("count_and_sum", wrap_count_and_sum);
+}
