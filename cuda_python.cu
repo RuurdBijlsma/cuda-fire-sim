@@ -206,10 +206,9 @@ public:
     }
 };
 
-const int W = 100;
-const int H = 100;
-
 int findBestThreadCount() {
+    const int W = 100;
+    const int H = 100;
     using std::chrono::high_resolution_clock;
     using std::chrono::duration_cast;
     using std::chrono::duration;
@@ -241,47 +240,94 @@ int findBestThreadCount() {
     return bestN;
 }
 
-void count_and_sum(double *array, int num, double output[]) {
-    double sum = 0.0;
-
-    for (int i = 0; i < num; ++i) {
-        sum += array[i];
-    }
-
-    // Set output values
-    output[0] = sum;
-    output[1] = (double) num;
+int batchSimulate(short *landCoverGrid,
+                  short *elevation,
+                  bool **fire,
+                  double ***weather,
+                  double *psoConfigs,
+                  double *landCoverRates,
+                  int width, int height, int timeSteps, int checkpoints,
+                  int weatherElements, int psoParams, int landCoverTypes, int batchSize,
+                  double output[]) {
+    return 12;
 }
 
 namespace p = boost::python;
 namespace np = boost::python::numpy;
 
-np::ndarray wrap_count_and_sum(np::ndarray const &array) {
 
-    // Make sure we get doubles
-    if (array.get_dtype() != np::dtype::get_builtin<double>()) {
-        PyErr_SetString(PyExc_TypeError, "Incorrect array data type");
+np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
+                              np::ndarray const &npElevation,
+                              np::ndarray const &npFire,
+                              np::ndarray const &npWeather,
+                              np::ndarray const &npPsoConfigs,
+                              np::ndarray const &npLandCoverRates) {
+    // Make sure we get right types
+    // 2D WxH array, each cell value is index for landCoverRates array
+    if (npLandCoverGrid.get_dtype() != np::dtype::get_builtin<short>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect landCoverGrid data type");
+        p::throw_error_already_set();
+    }
+    // 2D WxH array
+    if (npElevation.get_dtype() != np::dtype::get_builtin<short>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect elevation data type");
+        p::throw_error_already_set();
+    }
+    // 3D WxHxC array C is fire checkpoint steps count
+    if (npFire.get_dtype() != np::dtype::get_builtin<bool>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect fire data type");
+        p::throw_error_already_set();
+    }
+    // 4D WxHxTxE array T is time steps. E is elements size (wind X, wind Y)
+    if (npWeather.get_dtype() != np::dtype::get_builtin<double>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect weather data type");
         p::throw_error_already_set();
     }
 
-    // Could also pass back a vector, but unsure if you use C++ or C
-    static double output[3]; // the static here is important, keeps it around!
-    count_and_sum(reinterpret_cast<double *>(array.get_data()), array.shape(0), output);
+    // 2D PxN array P is params count, N is batch size
+    if (npPsoConfigs.get_dtype() != np::dtype::get_builtin<double>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect psoConfigs data type");
+        p::throw_error_already_set();
+    }
+    // 2D LxN array L is land cover type count, N is batch size
+    if (npLandCoverRates.get_dtype() != np::dtype::get_builtin<double>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect landCoverRates data type");
+        p::throw_error_already_set();
+    }
 
-    // test CUDA
-    output[2] = findBestThreadCount();
+    int width = (int) npLandCoverGrid.shape(0);
+    auto height = (int) npLandCoverGrid.shape(1);
+    auto timeSteps = (int) npWeather.shape(2);
+    auto checkpoints = (int) npFire.shape(2);
+    auto weatherElements = (int) npWeather.shape(3);
+    auto psoParams = (int) npPsoConfigs.shape(0);
+    auto batchSize = (int) npPsoConfigs.shape(1);
+    auto landCoverTypes = (int) npLandCoverRates.shape(0);
 
-    // Turning the output into a numpy array
+    auto landCoverGrid = reinterpret_cast<short *>(npLandCoverGrid.get_data());
+    auto elevation = reinterpret_cast<short *>(npElevation.get_data());
+    auto fire = reinterpret_cast<bool **>(npFire.get_data());
+    auto weather = reinterpret_cast<double ***>(npWeather.get_data());
+    auto psoConfigs = reinterpret_cast<double *>(npPsoConfigs.get_data());
+    auto landCoverRates = reinterpret_cast<double *>(npLandCoverRates.get_data());
+
+    static double output[2];
+
+    auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates,
+                              width, height, timeSteps, checkpoints,
+                              weatherElements, psoParams, landCoverTypes, batchSize, output);
+
+    output[0] = temp;
+    output[1] = temp * 12;
     np::dtype dt = np::dtype::get_builtin<double>();
     p::tuple shape = p::make_tuple(3); // It has shape (2,)
     p::tuple stride = p::make_tuple(sizeof(double)); // 1D array, so its just size of double
     np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
     return result;
-
 }
 
 BOOST_PYTHON_MODULE (cuda_python) {  // Thing in brackets should match output library name
     Py_Initialize();
     np::initialize();
-    p::def("count_and_sum", wrap_count_and_sum);
+    p::def("batch_simulate", wrapBatchSimulate);
 }
