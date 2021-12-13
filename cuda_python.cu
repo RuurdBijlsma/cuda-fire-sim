@@ -151,6 +151,13 @@ public:
     }
 
     bool initCuda() {
+        size_t free, total;
+        cudaStatus = cudaMemGetInfo(&free, &total);
+        if (cudaStatus != cudaSuccess)
+            return handleError("get mem info");
+
+        printf("Checking GPU MemInfo: free: %zu, total: %zu\n", free, total);
+
         // Init random generator on GPU
         cudaStatus = cudaMalloc(&d_randState, sizeof(curandState));
         if (cudaStatus != cudaSuccess)
@@ -206,9 +213,7 @@ public:
     }
 };
 
-int findBestThreadCount() {
-    const int W = 100;
-    const int H = 100;
+int findBestThreadCount(int W = 100, int H = 100) {
     using std::chrono::high_resolution_clock;
     using std::chrono::duration_cast;
     using std::chrono::duration;
@@ -249,6 +254,9 @@ int batchSimulate(short *landCoverGrid,
                   int width, int height, int timeSteps, int checkpoints,
                   int weatherElements, int psoParams, int landCoverTypes, int batchSize,
                   double output[]) {
+    for (int b = 0; b < batchSize; b++) {
+
+    }
     return 12;
 }
 
@@ -330,4 +338,5 @@ BOOST_PYTHON_MODULE (cuda_python) {  // Thing in brackets should match output li
     Py_Initialize();
     np::initialize();
     p::def("batch_simulate", wrapBatchSimulate);
+    p::def("find_best_thread_count", findBestThreadCount);
 }
