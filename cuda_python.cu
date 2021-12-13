@@ -7,12 +7,15 @@
 #include <boost/python.hpp>
 #include <boost/python/numpy.hpp>
 
+//TODO:
+//Fix cuda errors when size is large
+
 __global__ void setup_kernel(curandState *state) {
     unsigned int idx = threadIdx.x + blockDim.x * blockIdx.x;
     curand_init(1234, idx, 0, &state[idx]);
 }
 
-__global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCopy, const Params params,
+__global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCopy, const Params *params,
                         const unsigned int width, const unsigned int height) {
     const unsigned int size = width * height;
     unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
@@ -22,7 +25,7 @@ __global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCo
     unsigned int y = id / width;
 
     Cell cell = board[id];
-    float newFuel = cell.fuel - cell.fireActivity * params.burnRate;
+    float newFuel = cell.fuel - cell.fireActivity * params->burnRate;
 
     const int ns[3] = {-1, 0, 1};
     float activityGrid[8];
@@ -43,15 +46,15 @@ __global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCo
             // ------ WIND ------
             // Fire activity from neighbour cell counts more if wind comes from there
             activityGrid[dirIndex] =
-                    board[nI].fireActivity * (1 + params.windMatrix[dirIndex] * params.windEffectMultiplier);
+                    board[nI].fireActivity * (1 + params->windMatrix[dirIndex] * params->windEffectMultiplier);
             // ------ HEIGHT ------
             // Same but for height, going down decreases activity spread, going up increases it
             float heightDifference = cell.height - board[nI].height;
             // hD > 0 when neighbouring cell is higher than neighbour (fire would spread up)
             // hd < 0 when neighbouring cell is lower than neighbour (fire would spread down)
             heightDifference *= heightDifference > 0 ?
-                                params.heightEffectMultiplierUp :
-                                params.heightEffectMultiplierDown;
+                                params->heightEffectMultiplierUp :
+                                params->heightEffectMultiplierDown;
             activityGrid[dirIndex] = activityGrid[dirIndex] * (heightDifference + 1);
         }
     }
@@ -60,13 +63,13 @@ __global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCo
         activitySum += activity;
     float activity = (activitySum / 8) * cell.landCoverSpreadRate;
     float newActivity = cell.fireActivity;
-    if (activity > params.activityThreshold + curand_uniform(randState + id) / 5) {
+    if (activity > params->activityThreshold + curand_uniform(randState + id) / 5) {
         // Increase fire activity in current cell
         newActivity = cell.fuel * activity /
-                      (params.cellArea / params.spreadSpeed * params.areaEffectMultiplier);
-    } else if (activity <= params.fireDeathThreshold) {
+                      (params->cellArea / params->spreadSpeed * params->areaEffectMultiplier);
+    } else if (activity <= params->fireDeathThreshold) {
         // Reduce fire activity in current cell
-        newActivity /= 1 + (params.deathRate / (params.cellArea * params.areaEffectMultiplier));
+        newActivity /= 1 + (params->deathRate / (params->cellArea * params->areaEffectMultiplier));
     }
 
     boardCopy[id] = {
@@ -86,6 +89,7 @@ private:
     Cell *board;
     Cell *d_board = nullptr;
     Cell *d_boardCopy = nullptr;
+    Params *d_params = nullptr;
     Params params{};
     cudaError_t cudaStatus = cudaError_t();
     int nThreads;
@@ -124,8 +128,8 @@ public:
         if (cudaFailed)return false;
         // Execute on GPU
         gpuTick<<<size / nThreads + 1, nThreads>>>(
-                d_randState, d_board, d_boardCopy,
-                params, width, height
+                d_randState, d_board, d_boardCopy, d_params,
+                width, height
         );
 
         if (print) {
@@ -183,6 +187,16 @@ public:
         if (cudaStatus != cudaSuccess)
             return handleError("memCpy to GPU");
 
+        // allocate gpu buffers for board and copy
+        cudaStatus = cudaMalloc((void **) &d_params, sizeof(Params));
+        if (cudaStatus != cudaSuccess)
+            return handleError("malloc d_params");
+
+        // copy board from CPU to GPU
+        cudaStatus = cudaMemcpy(d_params, &params, sizeof(Params), cudaMemcpyHostToDevice);
+        if (cudaStatus != cudaSuccess)
+            return handleError("memCpy d_params to GPU");
+
         return true;
     }
 
@@ -203,6 +217,7 @@ public:
         cudaFree(d_board);
         cudaFree(d_boardCopy);
         cudaFree(d_randState);
+        printf("FREEING CUDA\n");
     }
 
     bool handleError(const std::string &reason) {
