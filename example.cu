@@ -126,16 +126,11 @@ public:
         cudaFree(d_board);
         cudaFree(d_boardCopy);
         cudaFree(d_randState);
+        cudaFree(d_params);
     }
 };
 
 int findBestThreadCount(int W, int H) {
-    using std::chrono::high_resolution_clock;
-    using std::chrono::duration_cast;
-    using std::chrono::duration;
-    using std::chrono::milliseconds;
-    duration<double, std::milli> best = std::chrono::system_clock::duration::max();
-    int bestN = -1;
     // 1st one: correct
     auto sim = Simulation(W, H, 32);
     sim.tick();
@@ -148,7 +143,7 @@ int findBestThreadCount(int W, int H) {
     sim = Simulation(W, H, 32);
     sim.tick();
 
-    return bestN;
+    printf("DONE");
 }
 
 int main() {
