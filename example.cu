@@ -5,95 +5,154 @@
 #include <curand_kernel.h>
 #include <string>
 
-__global__ void setup_kernel(curandState *state) {
-    unsigned int idx = threadIdx.x + blockDim.x * blockIdx.x;
-    curand_init(1234, idx, 0, &state[idx]);
+//TODO:
+//Fix cuda errors when size is large
+
+#define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true) {
+    if (code != cudaSuccess) {
+        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort) exit(code);
+    }
 }
 
-__global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCopy, const Params params, const unsigned int width,
-                        const unsigned int height) {
+__global__ void setupKernel(curandState *states) {
+    unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
+    curand_init(1234, id, 0, &states[id]);  // 	Initialize CURAND
+}
+
+__global__ void gpuTick(Cell *boardCopy,
+                        const unsigned int width, const unsigned int height) {
     const unsigned int size = width * height;
     unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id >= size) return;
-
-    unsigned int x = id % width;
-    unsigned int y = id / width;
-
-    Cell cell = board[id];
-
     boardCopy[id] = {
-            curand_uniform(randState + id),
-            curand_uniform(randState + id) * x,
-            cell.height,
-            cell.landCoverSpreadRate
+            1,
+            2,
+            3,
+            4
     };
 }
 
-bool handleError(const std::string &reason) {
-    printf("Cuda error! %s\n", reason.c_str());
-    return false;
-}
+class Simulation {
+private:
+    unsigned int width;
+    unsigned int height;
+    unsigned int size;
+    curandState *d_randState = nullptr;
+    Cell *board;
+    Cell *d_board = nullptr;
+    Cell *d_boardCopy = nullptr;
+    Params *d_params = nullptr;
+    Params *params = (Params *) malloc(sizeof(Params));
+    int nThreads;
 
-int main() {
-    int nThreads = 2000;
-    int ticks = 2000;
-    int repeats = 100;
-    int w = 100;
-    int h = 100;
-    int size = w * h;
+public:
+    Simulation(unsigned int w, unsigned int h, int threads = 1024) {
+        nThreads = threads;
+        width = w;
+        height = h;
+        size = w * h;
+        board = new Cell[size];
 
-    for (int r = 0; r < repeats; r++) {
-        Cell *d_board = nullptr;
-        Cell *d_boardCopy = nullptr;
-        curandState *d_randState = nullptr;
-        auto board = new Cell[size];
-        cudaError_t cudaStatus;
-        cudaStatus = cudaSetDevice(0);
-        if (cudaStatus != cudaSuccess)
-            return handleError("set device");
+        params->burnRate = .1;
+        params->heightEffectMultiplierUp = 2;
+        params->heightEffectMultiplierDown = 1;
+        params->windEffectMultiplier = 1;
+        params->activityThreshold = .2;
+        params->spreadSpeed = 1.5;
+        params->deathRate = .2;
+        params->areaEffectMultiplier = 1;
+        params->fireDeathThreshold = .1;
+        //           nw     w     sw     s      n     ne     e     se
+        float wm[8] = {1, 2, 3, 5, 0, 1, 2, 5};
+        for (int i = 0; i < 8; i++)
+            params->windMatrix[i] = wm[i];
+        params->cellArea = 1;
+        initBoard();
+        initCuda();
+    }
 
+    ~Simulation() {
+        freeCuda();
+    }
+
+    [[nodiscard]] unsigned int gridDim() const {
+        return size / nThreads + 1;
+    }
+
+    void tick() {
+        gpuTick<<<gridDim(), nThreads>>>(
+                d_boardCopy, width, height
+        );
+        std::swap(d_board, d_boardCopy);
+    }
+
+    void initBoard() {
+        for (int i = 0; i < size; i++)
+            board[i] = {
+                    1,
+                    1,
+                    1,
+                    1,
+            };
+    }
+
+    void initCuda() {
         size_t free, total;
-        cudaStatus = cudaMemGetInfo(&free, &total);
-        if (cudaStatus != cudaSuccess)
-            return handleError("get mem info");
-
-        // Init random generator on GPU
-        cudaStatus = cudaMalloc(&d_randState, sizeof(curandState));
-        if (cudaStatus != cudaSuccess)
-            return handleError("malloc random");
-        setup_kernel<<<size / nThreads + 1, nThreads>>>(d_randState);
+        cudaCheck(cudaSetDevice(0));
+        cudaCheck(cudaMemGetInfo(&free, &total));
 
         printf("Checking GPU MemInfo: free: %zu, total: %zu\n", free, total);
 
-        // allocate gpu buffers for board and copy
-        cudaStatus = cudaMalloc((void **) &d_board, size * sizeof(Cell));
-        if (cudaStatus != cudaSuccess)
-            return handleError("malloc d_board");
+        // Init [size] random generators on GPU for each thread
+        cudaCheck(cudaMalloc(&d_randState, gridDim() * nThreads * sizeof(curandState)));
+        setupKernel<<<gridDim(), nThreads>>>(d_randState);
 
         // allocate gpu buffers for board and copy
-        cudaStatus = cudaMalloc((void **) &d_boardCopy, size * sizeof(Cell));
-        if (cudaStatus != cudaSuccess)
-            return handleError("malloc d_board");
+        cudaCheck(cudaMalloc((void **) &d_board, size * sizeof(Cell)));
+        cudaCheck(cudaMalloc((void **) &d_boardCopy, size * sizeof(Cell)));
+        // copy board from CPU to GPU
+        cudaCheck(cudaMemcpy(d_board, board, size * sizeof(Cell), cudaMemcpyHostToDevice));
 
-        cudaStatus = cudaMemcpy(d_board, board, size * sizeof(Cell), cudaMemcpyHostToDevice);
-        if (cudaStatus != cudaSuccess)
-            return handleError("memCpy to GPU");
+        // allocate gpu buffers for params
+        cudaCheck(cudaMalloc((void **) &d_params, sizeof(Params)));
+        // copy params from CPU to GPU
+        cudaCheck(cudaMemcpy(d_params, &params, sizeof(Params), cudaMemcpyHostToDevice));
+    }
 
-        for (int i = 0; i < ticks; i++) {
-            // Execute on GPU
-            gpuTick<<<size / nThreads + 1, nThreads>>>(
-                    d_randState, d_board, d_boardCopy,
-                    w, h
-            );
-
-            std::swap(d_board, d_boardCopy);
-        }
-
+    void freeCuda() {
         cudaFree(d_board);
         cudaFree(d_boardCopy);
         cudaFree(d_randState);
     }
+};
 
+int findBestThreadCount(int W, int H) {
+    using std::chrono::high_resolution_clock;
+    using std::chrono::duration_cast;
+    using std::chrono::duration;
+    using std::chrono::milliseconds;
+    duration<double, std::milli> best = std::chrono::system_clock::duration::max();
+    int bestN = -1;
+    // 1st one: correct
+    auto sim = Simulation(W, H, 32);
+    sim.tick();
 
-    printf("SUCCESS");
+    // 2nd one: wrong call to cudaFree
+    sim = Simulation(W, H, 32);
+    sim.tick();
+
+    // 3rd one: invalid memory read/write
+    sim = Simulation(W, H, 32);
+    sim.tick();
+
+    return bestN;
+}
+
+int main() {
+    findBestThreadCount(50, 50);
+
+    return 0;
 }

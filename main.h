@@ -3,6 +3,7 @@
 //
 
 #include <curand_kernel.h>
+#include <array>
 
 struct Params {
     float burnRate;
