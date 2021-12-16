@@ -8,7 +8,7 @@
 #include <boost/python/numpy.hpp>
 
 //TODO:
-//Fix cuda errors when size is large
+// Remove malloc on repeated Simulations
 
 #define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
@@ -130,10 +130,6 @@ public:
         initCuda();
     }
 
-    ~Simulation() {
-        freeCuda();
-    }
-
     [[nodiscard]] unsigned int gridDim() const {
         return size / nThreads + 1;
     }
@@ -167,11 +163,11 @@ public:
     }
 
     void initCuda() {
-        size_t free, total;
         cudaCheck(cudaSetDevice(0));
-        cudaCheck(cudaMemGetInfo(&free, &total));
 
-        printf("Checking GPU MemInfo: free: %zu, total: %zu\n", free, total);
+//        size_t free, total;
+//        cudaCheck(cudaMemGetInfo(&free, &total));
+//        printf("Checking GPU MemInfo: free: %zu, total: %zu\n", free, total);
 
         // Init [size] random generators on GPU for each thread
         cudaCheck(cudaMalloc(&d_randState, gridDim() * nThreads * sizeof(curandState)));
@@ -201,10 +197,9 @@ public:
         }
     }
 
-    void freeCuda() {
-        cudaFree(d_board);
-        cudaFree(d_boardCopy);
-        cudaFree(d_randState);
+    static void freeCuda() {
+        printf("Free CUDA\n");
+        cudaCheck(cudaDeviceReset());
     }
 };
 
@@ -219,9 +214,10 @@ int findBestThreadCount(int W = 100, int H = 100) {
     auto sim = Simulation(W, H, 32);
     sim.tick(false);
 
-    for (int n = 96; n <= 192; n += 32) {
+    for (int n = 32; n <= 2048; n += 32) {
         auto t1 = high_resolution_clock::now();
 
+        Simulation::freeCuda();
         sim = Simulation(W, H, n);
         for (int i = 0; i < 100; i++) {
             sim.tick(false);
@@ -240,30 +236,117 @@ int findBestThreadCount(int W = 100, int H = 100) {
     return bestN;
 }
 
-int main() {
-    findBestThreadCount(50, 50);
+template<class T>
+struct NDimArray {
+    T *array;
+    int nDims;
+    long *shape;
+};
 
-    return 0;
+int batchSimulate(NDimArray<short> landCoverGrid,
+                  NDimArray<short> elevation,
+                  NDimArray<bool> fire,
+                  NDimArray<double> weather,
+                  NDimArray<double> psoConfigs,
+                  NDimArray<double> landCoverRates,
+                  double output[]) {
+    long width = landCoverGrid.shape[0];
+    long height = landCoverGrid.shape[1];
+    printf("Width %ld, height %ld\n", width, height);
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            printf("%i ", landCoverGrid.array[y * width + x]);
+        }
+        printf("\n");
+    }
+    printf("12\n");
+    return 12;
 }
 
-int batchSimulate(short *landCoverGrid,
-                  short *elevation,
-                  bool **fire,
-                  double ***weather,
-                  double *psoConfigs,
-                  double *landCoverRates,
-                  int width, int height, int timeSteps, int checkpoints,
-                  int weatherElements, int psoParams, int landCoverTypes, int batchSize,
-                  double output[]) {
-    for (int b = 0; b < batchSize; b++) {
-
-    }
-    return 12;
+int main() {
+    return 0;
 }
 
 namespace p = boost::python;
 namespace np = boost::python::numpy;
 
+unsigned long getOffset(int nDims, const long *strides, const int *indices, const size_t typeSize) {
+    unsigned long offset = 0;
+    for (int i = 0; i < nDims; i++) {
+        offset += indices[i] * strides[i] / typeSize;
+    }
+    return offset;
+}
+
+template<typename T>
+NDimArray<T> npToArray(const np::ndarray &npArray) {
+    if (npArray.get_dtype() != np::dtype::get_builtin<T>()) {
+        PyErr_SetString(PyExc_TypeError, "Incorrect data type for np array");
+        p::throw_error_already_set();
+    }
+
+    auto nDims = npArray.get_nd();
+    auto strides = npArray.get_strides();
+    long *shape = const_cast<long *>(npArray.get_shape());
+    long size = 1;
+    for (int i = 0; i < nDims; i++) {
+        printf("Shape[%i] = %li\n", i, shape[i]);
+        size *= shape[i];
+    }
+    T *result = static_cast<T *>(malloc(size * sizeof(T)));
+    T *strideArray = reinterpret_cast<T *>(npArray.get_data());
+    result[0] = strideArray[0];
+    if (nDims == 1) {
+        for (int x = 0; x < shape[0]; x++) {
+            int indices[1] = {x};
+            auto offset = getOffset(nDims, strides, indices, sizeof(T));
+            result[x] = strideArray[offset];
+        }
+    }
+    if (nDims == 2) {
+        for (int x = 0; x < shape[0]; x++) {
+            for (int y = 0; y < shape[1]; y++) {
+                int indices[2] = {x, y};
+                auto offset = getOffset(nDims, strides, indices, sizeof(T));
+                result[y * shape[0] + x] = strideArray[offset];
+            }
+        }
+    }
+    if (nDims == 3) {
+        for (int x = 0; x < shape[0]; x++) {
+            for (int y = 0; y < shape[1]; y++) {
+                for (int z = 0; z < shape[2]; z++) {
+                    int indices[3] = {x, y, z};
+                    auto offset = getOffset(nDims, strides, indices, sizeof(T));
+                    result[z * shape[0] * shape[1]
+                           + y * shape[0]
+                           + x] = strideArray[offset];
+                }
+            }
+        }
+    }
+    if (nDims == 4) {
+        for (int x = 0; x < shape[0]; x++) {
+            for (int y = 0; y < shape[1]; y++) {
+                for (int z = 0; z < shape[2]; z++) {
+                    for (int q = 0; q < shape[2]; q++) {
+                        int indices[4] = {x, y, z, q};
+                        auto offset = getOffset(nDims, strides, indices, sizeof(T));
+                        result[q * shape[0] * shape[1] * shape[2]
+                               + z * shape[0] * shape[1]
+                               + y * shape[0]
+                               + x] = strideArray[offset];
+                    }
+                }
+            }
+        }
+    }
+    return NDimArray<T>{
+            result,
+            nDims,
+            shape,
+    };
+}
 
 np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
                               np::ndarray const &npElevation,
@@ -273,58 +356,26 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
                               np::ndarray const &npLandCoverRates) {
     // Make sure we get right types
     // 2D WxH array, each cell value is index for landCoverRates array
-    if (npLandCoverGrid.get_dtype() != np::dtype::get_builtin<short>()) {
-        PyErr_SetString(PyExc_TypeError, "Incorrect landCoverGrid data type");
-        p::throw_error_already_set();
-    }
     // 2D WxH array
-    if (npElevation.get_dtype() != np::dtype::get_builtin<short>()) {
-        PyErr_SetString(PyExc_TypeError, "Incorrect elevation data type");
-        p::throw_error_already_set();
-    }
     // 3D WxHxC array C is fire checkpoint steps count
-    if (npFire.get_dtype() != np::dtype::get_builtin<bool>()) {
-        PyErr_SetString(PyExc_TypeError, "Incorrect fire data type");
-        p::throw_error_already_set();
-    }
     // 4D WxHxTxE array T is time steps. E is elements size (wind X, wind Y)
-    if (npWeather.get_dtype() != np::dtype::get_builtin<double>()) {
-        PyErr_SetString(PyExc_TypeError, "Incorrect weather data type");
-        p::throw_error_already_set();
-    }
-
     // 2D PxN array P is params count, N is batch size
-    if (npPsoConfigs.get_dtype() != np::dtype::get_builtin<double>()) {
-        PyErr_SetString(PyExc_TypeError, "Incorrect psoConfigs data type");
-        p::throw_error_already_set();
-    }
     // 2D LxN array L is land cover type count, N is batch size
-    if (npLandCoverRates.get_dtype() != np::dtype::get_builtin<double>()) {
-        PyErr_SetString(PyExc_TypeError, "Incorrect landCoverRates data type");
-        p::throw_error_already_set();
-    }
 
-    int width = (int) npLandCoverGrid.shape(0);
-    auto height = (int) npLandCoverGrid.shape(1);
-    auto timeSteps = (int) npWeather.shape(2);
-    auto checkpoints = (int) npFire.shape(2);
-    auto weatherElements = (int) npWeather.shape(3);
-    auto psoParams = (int) npPsoConfigs.shape(0);
-    auto batchSize = (int) npPsoConfigs.shape(1);
-    auto landCoverTypes = (int) npLandCoverRates.shape(0);
+    printf("STARTING C++ ENGINES\n");
 
-    auto landCoverGrid = reinterpret_cast<short *>(npLandCoverGrid.get_data());
-    auto elevation = reinterpret_cast<short *>(npElevation.get_data());
-    auto fire = reinterpret_cast<bool **>(npFire.get_data());
-    auto weather = reinterpret_cast<double ***>(npWeather.get_data());
-    auto psoConfigs = reinterpret_cast<double *>(npPsoConfigs.get_data());
-    auto landCoverRates = reinterpret_cast<double *>(npLandCoverRates.get_data());
+//    auto landCoverGrid = npToArray<short>(npLandCoverGrid);
+//    auto elevation = npToArray<short>(npElevation);
+//    auto fire = npToArray<bool>(npFire);
+    auto weather = npToArray<double>(npWeather);
+//    auto psoConfigs = npToArray<double>(npPsoConfigs);
+//    auto landCoverRates = npToArray<double>(npLandCoverRates);
 
     static double output[2];
 
-    auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates,
-                              width, height, timeSteps, checkpoints,
-                              weatherElements, psoParams, landCoverTypes, batchSize, output);
+//    auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates, output);
+//    auto temp = psoConfigs.array[0];
+    auto temp = weather.array[0];
 
     output[0] = temp;
     output[1] = temp * 12;
@@ -332,6 +383,7 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     p::tuple shape = p::make_tuple(3); // It has shape (2,)
     p::tuple stride = p::make_tuple(sizeof(double)); // 1D array, so its just size of double
     np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
+    printf("FINITO\n");
     return result;
 }
 

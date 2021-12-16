@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc)
 #set(BOOST_ROOT=/home/ruurd/Documents/SDK/boost178)
-SET(Boost_DEBUG ON)
+#SET(Boost_DEBUG ON)
 #SET(BOOST_INCLUDEDIR "/usr/include/boost")
 #SET(BOOST_LIBRARYDIR "/usr/lib")
 
@@ -32,9 +32,9 @@ set(CMAKE_SHARED_LIBRARY_PREFIX "")
 
 # Add a shared module - modules are intended to be imported at runtime.
 # - This is where you add the source files
-#add_library(cuda_python SHARED cuda_python.cu)
+add_library(cuda_python SHARED cuda_python.cu)
 #add_executable(cuda_python cuda_python.cu)
-add_executable(cuda_python example.cu)
+#add_executable(cuda_python example.cu)
 
 set_target_properties(cuda_python PROPERTIES CUDA_ARCHITECTURES "72")
 set_target_properties(cuda_python PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
@@ -45,3 +45,17 @@ target_include_directories(cuda_python PRIVATE ${PYTHON_INCLUDE_DIRS})
 
 set_target_properties(cuda_python PROPERTIES DEFINE_SYMBOL "BOOST_ALL_NO_LIB")
 #set_target_properties(cuda_python PROPERTIES SUFFIX ".pyd")
+
+#configure_file(${CMAKE_SOURCE_DIR}/test_sim.py ${CMAKE_BINARY_DIR}/test_sim.py)
+
+# Copy python file to build dir
+add_custom_target(
+        always_run ALL
+        DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/__fake.h
+)
+add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/__fake.h
+        COMMAND ${CMAKE_COMMAND} -E copy
+            ${CMAKE_CURRENT_SOURCE_DIR}/test_sim.py
+            ${CMAKE_CURRENT_BINARY_DIR}/test_sim.py
+)

@@ -74,10 +74,6 @@ public:
         initCuda();
     }
 
-    ~Simulation() {
-        freeCuda();
-    }
-
     [[nodiscard]] unsigned int gridDim() const {
         return size / nThreads + 1;
     }
@@ -122,28 +118,21 @@ public:
         cudaCheck(cudaMemcpy(d_params, &params, sizeof(Params), cudaMemcpyHostToDevice));
     }
 
-    void freeCuda() {
-        cudaFree(d_board);
-        cudaFree(d_boardCopy);
-        cudaFree(d_randState);
-        cudaFree(d_params);
+    static void freeCuda() {
+        printf("Free CUDA\n");
+        cudaCheck(cudaDeviceReset());
     }
 };
 
 int findBestThreadCount(int W, int H) {
-    // 1st one: correct
-    auto sim = Simulation(W, H, 32);
-    sim.tick();
+    for (int i = 0; i < 100; i++) {
+        auto sim = Simulation(W, H, 32);
+        sim.tick();
+        Simulation::freeCuda();
+    }
 
-    // 2nd one: wrong call to cudaFree
-    sim = Simulation(W, H, 32);
-    sim.tick();
-
-    // 3rd one: invalid memory read/write
-    sim = Simulation(W, H, 32);
-    sim.tick();
-
-    printf("DONE");
+    printf("DONE\n");
+    return 0;
 }
 
 int main() {
