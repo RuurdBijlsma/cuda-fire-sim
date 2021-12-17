@@ -6,8 +6,8 @@ height = 4
 timeSteps = 5
 checkpoints = 3
 weatherElements = 2
-psoParams = 500
-batchSize = 500
+psoParams = 20
+batchSize = 50
 landCoverTypes = 8
 
 landCoverGrid = np.zeros((width, height), dtype=np.int16)
@@ -17,8 +17,9 @@ weather = np.ones((width, height, timeSteps, weatherElements), dtype=np.float64)
 psoConfigs = np.ones((psoParams, batchSize), dtype=float) * 5
 landCoverRates = np.ones((landCoverTypes, batchSize), dtype=float) * 6
 
-landCoverGrid[0, :] = 1
+landCoverGrid[:, 0] = 1
+fire[:, :, 0] = False
 
-print("Sending data!!!!\n", weather)
+print("Sending data!!!!\n", fire)
 result = cuda_python.batch_simulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates)
 print("Result from batch_simulate = " + str(result))

@@ -32,7 +32,7 @@ set(CMAKE_SHARED_LIBRARY_PREFIX "")
 
 # Add a shared module - modules are intended to be imported at runtime.
 # - This is where you add the source files
-add_library(cuda_python SHARED cuda_python.cu)
+add_library(cuda_python SHARED cuda_python.cu pythonHelpers.h)
 #add_executable(cuda_python cuda_python.cu)
 #add_executable(cuda_python example.cu)
 

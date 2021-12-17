@@ -5,26 +5,39 @@
 #include <curand_kernel.h>
 #include <array>
 
-struct Params {
-    float burnRate;
-    float heightEffectMultiplierUp;
-    float heightEffectMultiplierDown;
-    float windEffectMultiplier;
-    float activityThreshold;
-    float spreadSpeed;
-    float deathRate;
-    float areaEffectMultiplier;
-    float fireDeathThreshold;
-    float windMatrix[8];
-    float cellArea;
+const int paramCount = 10;
+enum Params {
+    burnRate = 0,
+    heightEffectMultiplierUp = 1,
+    heightEffectMultiplierDown = 2,
+    windEffectMultiplier = 3,
+    activityThreshold = 4,
+    spreadSpeed = 5,
+    deathRate = 6,
+    areaEffectMultiplier = 7,
+    fireDeathThreshold = 8,
+    cellArea = 9,
 };
 
+//struct Params {
+//    float burnRate;
+//    float heightEffectMultiplierUp;
+//    float heightEffectMultiplierDown;
+//    float windEffectMultiplier;
+//    float activityThreshold;
+//    float spreadSpeed;
+//    float deathRate;
+//    float areaEffectMultiplier;
+//    float fireDeathThreshold;
+//    float windMatrix[8];
+//    float cellArea;
+//};
+
 struct Cell {
-    float fireActivity;
-    float fuel;
-    float height;
-    float landCoverSpreadRate;
-    // bank conflicts??
+    double fireActivity;
+    double fuel;
+    short height;
+    int landCoverSpreadIndex;
 };
 
 __global__ void gpuTick(curandState *randState, const Cell *board, Cell *boardCopy, Params params,
