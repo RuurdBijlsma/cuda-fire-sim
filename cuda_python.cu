@@ -298,13 +298,14 @@ NDimArray<T> npToArray(const np::ndarray &npArray) {
     printf("sizeof T %lu\n", sizeof(T));
     printf("Malloc size %lu\n", mallocSize);
     printf("nDims %d\n", nDims);
-    T *result = static_cast<double *>(malloc(mallocSize));
+    T *result = static_cast<T *>(malloc(mallocSize));
     T *strideArray = reinterpret_cast<T *>(npArray.get_data());
     result[0] = strideArray[0];
     if (nDims == 1) {
         for (int x = 0; x < shape[0]; x++) {
             int indices[1] = {x};
             auto offset = getOffset(nDims, strides, indices, sizeof(T));
+            printf("Writing 1dim index = %i\n", x);
             result[x] = strideArray[offset];
         }
     }
@@ -313,7 +314,9 @@ NDimArray<T> npToArray(const np::ndarray &npArray) {
             for (int y = 0; y < shape[1]; y++) {
                 int indices[2] = {x, y};
                 auto offset = getOffset(nDims, strides, indices, sizeof(T));
-                result[y * shape[0] + x] = strideArray[offset];
+                auto index = y * shape[0] + x;
+                printf("Writing 2dim index = %li\n", index);
+                result[index] = strideArray[offset];
             }
         }
     }
@@ -323,9 +326,11 @@ NDimArray<T> npToArray(const np::ndarray &npArray) {
                 for (int z = 0; z < shape[2]; z++) {
                     int indices[3] = {x, y, z};
                     auto offset = getOffset(nDims, strides, indices, sizeof(T));
-                    result[z * shape[0] * shape[1]
-                           + y * shape[0]
-                           + x] = strideArray[offset];
+                    auto index = z * shape[0] * shape[1]
+                                 + y * shape[0]
+                                 + x;
+                    printf("Writing 3dim index = %li\n", index);
+                    result[index] = strideArray[offset];
                 }
             }
         }
@@ -341,6 +346,7 @@ NDimArray<T> npToArray(const np::ndarray &npArray) {
                                      + z * shape[0] * shape[1]
                                      + y * shape[0]
                                      + x;
+                        printf("Writing 4dim index = %li\n", index);
                         result[index] = strideArray[offset];
                     }
                 }
@@ -370,10 +376,10 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
 
     printf("STARTING C++ ENGINES\n");
 
-//    auto landCoverGrid = npToArray<short>(npLandCoverGrid);
+    auto landCoverGrid = npToArray<short>(npLandCoverGrid);
 //    auto elevation = npToArray<short>(npElevation);
 //    auto fire = npToArray<bool>(npFire);
-    auto weather = npToArray<double>(npWeather);
+//    auto weather = npToArray<double>(npWeather);
 //    auto psoConfigs = npToArray<double>(npPsoConfigs);
 //    auto landCoverRates = npToArray<double>(npLandCoverRates);
 
@@ -381,7 +387,7 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
 
 //    auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates, output);
 //    auto temp = psoConfigs.array[0];
-    auto temp = weather.array[0];
+    auto temp = landCoverGrid.array[0];
 
     output[0] = temp;
     output[1] = temp * 12;
