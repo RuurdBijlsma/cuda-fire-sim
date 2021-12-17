@@ -293,7 +293,12 @@ NDimArray<T> npToArray(const np::ndarray &npArray) {
         printf("Shape[%i] = %li\n", i, shape[i]);
         size *= shape[i];
     }
-    T *result = static_cast<T *>(malloc(size * sizeof(T)));
+    auto mallocSize = size * sizeof(T);
+    printf("array size %lu\n", size);
+    printf("sizeof T %lu\n", sizeof(T));
+    printf("Malloc size %lu\n", mallocSize);
+    printf("nDims %d\n", nDims);
+    T *result = static_cast<double *>(malloc(mallocSize));
     T *strideArray = reinterpret_cast<T *>(npArray.get_data());
     result[0] = strideArray[0];
     if (nDims == 1) {
@@ -329,13 +334,14 @@ NDimArray<T> npToArray(const np::ndarray &npArray) {
         for (int x = 0; x < shape[0]; x++) {
             for (int y = 0; y < shape[1]; y++) {
                 for (int z = 0; z < shape[2]; z++) {
-                    for (int q = 0; q < shape[2]; q++) {
+                    for (int q = 0; q < shape[3]; q++) {
                         int indices[4] = {x, y, z, q};
                         auto offset = getOffset(nDims, strides, indices, sizeof(T));
-                        result[q * shape[0] * shape[1] * shape[2]
-                               + z * shape[0] * shape[1]
-                               + y * shape[0]
-                               + x] = strideArray[offset];
+                        auto index = q * shape[0] * shape[1] * shape[2]
+                                     + z * shape[0] * shape[1]
+                                     + y * shape[0]
+                                     + x;
+                        result[index] = strideArray[offset];
                     }
                 }
             }
