@@ -1,5 +1,3 @@
-#include <iostream>
-#include <chrono>
 #include "main.h"
 #include "pythonHelpers.h"
 #include <curand.h>
@@ -8,12 +6,13 @@
 
 //TODO:
 // Remove malloc on repeated Simulations
+// Send data as arrays not structs with pointer arrays
 
 #define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true) {
     if (code != cudaSuccess) {
-        fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+        fprintf(stderr, "GPU assert: %s %s %d\n", cudaGetErrorString(code), file, line);
         if (abort) exit(code);
     }
 }
@@ -24,13 +23,17 @@ __global__ void setupKernel(curandState *states) {
 }
 
 __global__ void gpuTick(curandState *randStates,
-                        const Cell *board, Cell *boardCopy,
-                        const NDimArray<double> *landCoverRates,
-                        const NDimArray<double> *psoConfigs,
-                        const unsigned int width,
-                        const unsigned int height,
+                        Cell *board, Cell *boardCopy,
+                        const double *landCoverRates,
+                        const double *params,
+                        const double *weather,
+                        const NDimArrayShape lcrShape,
+                        const NDimArrayShape paramsShape,
+                        const NDimArrayShape weatherShape,
                         const unsigned int batchIndex
 ) {
+    const auto width = weatherShape.s0;
+    const auto height = weatherShape.s1;
     const auto size = width * height;
     auto id = blockIdx.x * blockDim.x + threadIdx.x;
     if (id >= size) return;
@@ -40,8 +43,7 @@ __global__ void gpuTick(curandState *randStates,
     auto y = id / width;
 
     Cell cell = board[id];
-    auto newFuel =
-            cell.fuel - cell.fireActivity * psoConfigs->array[Params::burnRate + batchIndex * psoConfigs->shape[0]];
+    auto newFuel = cell.fuel - cell.fireActivity * params[Params::burnRate + batchIndex * paramsShape.s0];
 
     const int ns[3] = {-1, 0, 1};
     double activityGrid[8];
@@ -50,7 +52,7 @@ __global__ void gpuTick(curandState *randStates,
         for (auto yOffset: ns) {
             dirIndex++;
             if (xOffset == 0 && yOffset == 0)
-                continue; // don't count same cell as neighbour
+                continue; // skip current cell because it's not a neighbour
             // calculate neighbour coordinate
             auto nX = (int) x + xOffset;
             auto nY = (int) y + yOffset;
@@ -61,6 +63,7 @@ __global__ void gpuTick(curandState *randStates,
             auto nI = nY * width + nX;
             // ------ WIND ------
             // Fire activity from neighbour cell counts more if wind comes from there
+            activityGrid[dirIndex] = board[nI].fireActivity;
             // todo WIND
             // ------ HEIGHT ------
             // Same but for height, going down decreases activity spread, going up increases it
@@ -68,8 +71,8 @@ __global__ void gpuTick(curandState *randStates,
 //             hD > 0 when neighbouring cell is higher than neighbour (fire would spread up)
 //             hD < 0 when neighbouring cell is lower than neighbour (fire would spread down)
             heightDifference *= heightDifference > 0 ?
-                                psoConfigs->array[Params::heightEffectMultiplierUp + batchIndex * paramCount] :
-                                psoConfigs->array[Params::heightEffectMultiplierDown + batchIndex * paramCount];
+                                params[Params::heightEffectMultiplierUp + batchIndex * paramCount] :
+                                params[Params::heightEffectMultiplierDown + batchIndex * paramCount];
             activityGrid[dirIndex] = activityGrid[dirIndex] * (heightDifference + 1);
         }
     }
@@ -77,30 +80,28 @@ __global__ void gpuTick(curandState *randStates,
     for (auto activity: activityGrid)
         activitySum += activity;
     auto activity = (activitySum / 8) *
-                    landCoverRates->array[cell.landCoverSpreadIndex + batchIndex * landCoverRates->shape[0]];
+                    landCoverRates[cell.landCoverSpreadIndex + batchIndex * lcrShape.s0];
     auto newActivity = cell.fireActivity;
     auto randomNum = curand_uniform(&localRandState);
-    auto cellArea = psoConfigs->array[Params::cellArea + batchIndex * psoConfigs->shape[0]];
-    auto activityThreshold = psoConfigs->array[Params::activityThreshold + batchIndex * psoConfigs->shape[0]];
-    auto areaEffectMultiplier = psoConfigs->array[Params::areaEffectMultiplier + batchIndex * psoConfigs->shape[0]];
-    auto fireDeathThreshold = psoConfigs->array[Params::fireDeathThreshold + batchIndex * psoConfigs->shape[0]];
+    auto cellArea = params[Params::cellArea + batchIndex * paramsShape.s0];
+    auto activityThreshold = params[Params::activityThreshold + batchIndex * paramsShape.s0];
+    auto areaEffectMultiplier = params[Params::areaEffectMultiplier + batchIndex * paramsShape.s0];
+    auto fireDeathThreshold = params[Params::fireDeathThreshold + batchIndex * paramsShape.s0];
     if (activity > activityThreshold + randomNum / 5) {
-        auto spreadSpeed = psoConfigs->array[Params::spreadSpeed + batchIndex * psoConfigs->shape[0]];
+        auto spreadSpeed = params[Params::spreadSpeed + batchIndex * paramsShape.s0];
 //        // Increase fire activity in current cell
         newActivity = cell.fuel * activity /
                       (cellArea / spreadSpeed * areaEffectMultiplier);
     } else if (activity <= fireDeathThreshold) {
-        auto deathRate = psoConfigs->array[Params::deathRate + batchIndex * psoConfigs->shape[0]];
+        auto deathRate = params[Params::deathRate + batchIndex * paramsShape.s0];
 //        // Reduce fire activity in current cell
         newActivity /= 1 + (deathRate / (cellArea * areaEffectMultiplier));
     }
 
-    boardCopy[id] = {
-            newActivity,
-            newFuel,
-            cell.height,
-            cell.landCoverSpreadIndex
-    };
+    boardCopy[id].fireActivity = newActivity;
+    boardCopy[id].fuel = newFuel;
+    boardCopy[id].height = cell.height;
+    boardCopy[id].landCoverSpreadIndex = cell.landCoverSpreadIndex;
 }
 
 class Simulation {
@@ -110,19 +111,23 @@ private:
     unsigned int size;
     unsigned int batchIndex;
     Cell *board;
-    NDimArray<short> *landCoverGrid{};
-    NDimArray<short> *elevation{};
-    NDimArray<bool> *fire{};
-    NDimArray<double> *weather{};
-    NDimArray<double> *psoConfigs{};
-    NDimArray<double> *landCoverRates{};
+    NDimArray<short> landCoverGrid{};
+    NDimArray<short> elevation{};
+    NDimArray<bool> fire{};
+    NDimArray<double> weather{};
+    NDimArray<double> psoConfigs{};
+    NDimArray<double> landCoverRates{};
+
+    NDimArrayShape lcrShape{};
+    NDimArrayShape paramsShape{};
+    NDimArrayShape weatherShape{};
 
     curandState *d_randState = nullptr;
     Cell *d_board = nullptr;
     Cell *d_boardCopy = nullptr;
-    NDimArray<double> *d_weather = nullptr;
-    NDimArray<double> *d_landCoverRates = nullptr;
-    NDimArray<double> *d_psoConfigs = nullptr;
+    double *d_weather = nullptr;
+    double *d_landCoverRates = nullptr;
+    double *d_params = nullptr;
     int nThreads;
 
 public:
@@ -131,14 +136,22 @@ public:
                const NDimArray<short> &elevation,
                const NDimArray<bool> &fire,
                const NDimArray<double> &weather,
-               const NDimArray<double> &psoConfigs,
+               const NDimArray<double> &params,
                const NDimArray<double> &landCoverRates) {
-        *this->landCoverGrid = landCoverGrid;
-        *this->elevation = elevation;
-        *this->fire = fire;
-        *this->weather = weather;
-        *this->psoConfigs = psoConfigs;
-        *this->landCoverRates = landCoverRates;
+        this->landCoverGrid = landCoverGrid;
+        this->elevation = elevation;
+        this->fire = fire;
+        this->weather = weather;
+        this->psoConfigs = params;
+        this->landCoverRates = landCoverRates;
+        this->lcrShape.s0 = landCoverGrid.shape[0];
+        this->lcrShape.s1 = landCoverGrid.shape[1];
+        this->paramsShape.s0 = params.shape[0];
+        this->paramsShape.s1 = params.shape[1];
+        this->weatherShape.s0 = weather.shape[0];
+        this->weatherShape.s1 = weather.shape[1];
+        this->weatherShape.s2 = weather.shape[2];
+        this->weatherShape.s3 = weather.shape[3];
 
         width = w;
         height = h;
@@ -159,8 +172,9 @@ public:
         // Execute on GPU
         gpuTick<<<gridDim(), nThreads>>>(
                 d_randState, d_board, d_boardCopy,
-                d_landCoverRates, d_psoConfigs,
-                width, height, batchIndex
+                d_landCoverRates, d_params, d_weather,
+                lcrShape, paramsShape, weatherShape,
+                batchIndex
         );
 
         if (print) {
@@ -177,17 +191,17 @@ public:
             for (int x = 0; x < width; x++) {
                 auto index = y * width + x;
                 board[index] = {
-                        fire->array[index] ? 1. : 0.,
+                        fire.array[index] ? 1. : 0.,
                         1,
-                        elevation->array[index],
-                        landCoverGrid->array[index],
+                        elevation.array[index],
+                        landCoverGrid.array[index],
                 };
             }
         }
     }
 
     void initCuda() {
-        cudaCheck(cudaSetDevice(0));
+        cudaCheck(cudaSetDevice(0))
 
 //        size_t free, total;
 //        cudaCheck(cudaMemGetInfo(&free, &total));
@@ -197,24 +211,36 @@ public:
         cudaCheck(cudaMalloc(&d_randState, gridDim() * nThreads * sizeof(curandState)))
         setupKernel<<<gridDim(), nThreads>>>(d_randState);
 
+        auto weatherSize = nDimArrayLength(weather) * sizeof(double);
+        auto psoConfigsSize = nDimArrayLength(psoConfigs) * sizeof(double);
+        auto landCoverRatesSize = nDimArrayLength(landCoverRates) * sizeof(double);
+
+        printf("nDimArrayLength(weather) = %lu\n", nDimArrayLength(weather));
+
         // allocate gpu buffers for board and copy
         cudaCheck(cudaMalloc((void **) &d_board, size * sizeof(Cell)))
         cudaCheck(cudaMalloc((void **) &d_boardCopy, size * sizeof(Cell)))
-        cudaCheck(cudaMalloc((void **) &d_weather, sizeof(weather)))
-        cudaCheck(cudaMalloc((void **) &d_psoConfigs, sizeof(psoConfigs)))
-        cudaCheck(cudaMalloc((void **) &d_landCoverRates, sizeof(landCoverRates)))
+        cudaCheck(cudaMalloc((void **) &d_weather, weatherSize))
+        cudaCheck(cudaMalloc((void **) &d_params, psoConfigsSize))
+        cudaCheck(cudaMalloc((void **) &d_landCoverRates, landCoverRatesSize))
         // copy board from CPU to GPU
         cudaCheck(cudaMemcpy(d_board, board, size * sizeof(Cell), cudaMemcpyHostToDevice))
-        cudaCheck(cudaMemcpy(d_weather, weather, sizeof(weather), cudaMemcpyHostToDevice))
+        cudaCheck(cudaMemcpy(d_weather, weather.array, weatherSize, cudaMemcpyHostToDevice))
+        cudaCheck(cudaMemcpy(d_params, psoConfigs.array, psoConfigsSize, cudaMemcpyHostToDevice))
+        cudaCheck(cudaMemcpy(d_landCoverRates, landCoverRates.array, landCoverRatesSize, cudaMemcpyHostToDevice))
     }
 
     void printBoard() {
         for (int j = 0; j < width * height; j++) {
             auto cell = board[j];
-            if (cell.fireActivity > .5)
-                printf("O ");
+            if (cell.fireActivity <= 0)
+                printf(". ");
+            else if(cell.fireActivity <= .3)
+                printf("c ");
+            else if(cell.fireActivity <= .6)
+                printf("o ");
             else
-                printf("_ ");
+                printf("O ");
             if (j % width == width - 1)
                 printf("\n");
         }
@@ -222,43 +248,10 @@ public:
 
     static void freeCuda() {
         printf("Free CUDA\n");
-        cudaCheck(cudaDeviceReset());
+        cudaCheck(cudaDeviceSynchronize())
+        cudaCheck(cudaDeviceReset())
     }
 };
-
-int findBestThreadCount(int W = 100, int H = 100) {
-    using std::chrono::high_resolution_clock;
-    using std::chrono::duration_cast;
-    using std::chrono::duration;
-    using std::chrono::milliseconds;
-    duration<double, std::milli> best = std::chrono::system_clock::duration::max();
-    int bestN = -1;
-    // warm up cuda boy
-    auto sim = Simulation(W, H, 0, 32,);
-    sim.tick(false);
-
-    for (int n = 32; n <= 2048; n += 32) {
-        auto t1 = high_resolution_clock::now();
-
-        Simulation::freeCuda();
-        sim = Simulation(W, H, n);
-        for (int i = 0; i < 100; i++) {
-            sim.tick(false);
-        }
-
-        auto t2 = high_resolution_clock::now();
-        /* Getting number of milliseconds as a double. */
-        duration<double, std::milli> dur = t2 - t1;
-        std::cout << dur.count() << "ms - " << n << " threads" << std::endl;
-        if (dur < best) {
-            best = dur;
-            bestN = n;
-        }
-    }
-    printf("Best thread count is %i with duration %fms\n", bestN, best.count());
-    return bestN;
-}
-
 
 int batchSimulate(NDimArray<short> landCoverGrid,
                   NDimArray<short> elevation,
@@ -267,11 +260,52 @@ int batchSimulate(NDimArray<short> landCoverGrid,
                   NDimArray<double> psoConfigs,
                   NDimArray<double> landCoverRates,
                   double output[]) {
+    auto width = landCoverGrid.shape[0];
+    auto height = landCoverGrid.shape[1];
+    auto batchSize = psoConfigs.shape[1];
+    auto timeSteps = weather.shape[2];
+    for (int i = 0; i < batchSize; i++) {
+        printf("Iteration %i\n", i);
+        auto sim = Simulation(width, height, i, 96,
+                              landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates);
+        sim.printBoard();
+        for (int t = 0; t < timeSteps; t++) {
+            printf("Tick %i\n", t);
+            sim.tick(true);
+        }
+        Simulation::freeCuda();
+    }
 
-    return 12;
+    return 0;
 }
 
 int main() {
+    int width = 10;
+    int height = 8;
+    int timeSteps = 20;
+    int checkpoints = 3;
+    int weatherElements = 2;
+    int psoParams = 20;
+    int batchSize = 1;
+    int landCoverTypes = 8;
+
+    auto landCoverGrid = createNDimArray<short>(2, new long[2]{width, height}, 1);
+    auto landCoverRates = createNDimArray<double>(2, new long[2]{width, height}, 2);
+    auto elevation = createNDimArray<short>(2, new long[2]{landCoverTypes, batchSize}, 3);
+    auto fire = createNDimArray<bool>(3, new long[3]{width, height, checkpoints}, false);
+    auto weather = createNDimArray<double>(4, new long[4]{width, height, timeSteps, weatherElements}, 4);
+    auto psoConfigs = createNDimArray<double>(2, new long[2]{psoParams, batchSize}, 5);
+
+    fire.array[0] = true;
+    fire.array[1] = true;
+    fire.array[1 * width + 1] = true;
+    fire.array[1 * width + 0] = true;
+
+    static double output[2];
+    auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates, output);
+    printf("bs output %i\n", temp);
+    printf("output again %f %f\n", output[0], output[1]);
+
     return 0;
 }
 
@@ -298,6 +332,13 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     auto psoConfigs = npToArray<double>(npPsoConfigs);
     auto landCoverRates = npToArray<double>(npLandCoverRates);
 
+    printf("Sizeof landCoverGrid = %lu\n", sizeOfNDimArray(landCoverGrid));
+    printf("Sizeof elevation = %lu\n", sizeOfNDimArray(elevation));
+    printf("Sizeof fire = %lu\n", sizeOfNDimArray(fire));
+    printf("Sizeof weather = %lu\n", sizeOfNDimArray(weather));
+    printf("Sizeof psoConfigs = %lu\n", sizeOfNDimArray(psoConfigs));
+    printf("Sizeof landCoverRates = %lu\n", sizeOfNDimArray(landCoverRates));
+
     static double output[2];
 
     auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates, output);
@@ -318,5 +359,5 @@ BOOST_PYTHON_MODULE (cuda_python) {  // Thing in brackets should match output li
     Py_Initialize();
     np::initialize();
     p::def("batch_simulate", wrapBatchSimulate);
-    p::def("find_best_thread_count", findBestThreadCount);
+//    p::def("find_best_thread_count", findBestThreadCount);
 }

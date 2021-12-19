@@ -20,6 +20,28 @@ struct NDimArray {
     long *shape;
 };
 
+struct NDimArrayShape {
+    long s0 = 0;
+    long s1 = 0;
+    long s2 = 0;
+    long s3 = 0;
+};
+
+template<typename T>
+unsigned long nDimArrayLength(NDimArray<T> array) {
+    unsigned long arraySize = 1;
+    for (int i = 0; i < array.nDims; i++) {
+        arraySize *= array.shape[i];
+    }
+    return arraySize;
+}
+
+template<typename T>
+size_t sizeOfNDimArray(NDimArray<T> array) {
+    auto size = sizeof(int) + sizeof(long) * array.nDims;
+    return size + sizeof(T) * nDimArrayLength(array);
+}
+
 unsigned long getIndex(long x) {
     return x;
 }
@@ -144,4 +166,16 @@ void printNDimArray(NDimArray<T> array, const std::string &arrayName = "ARRAY") 
         }
         printf("\n");
     }
+}
+
+template<typename T>
+NDimArray<T> createNDimArray(long nDims, long *shape, T fillValue) {
+    auto result = NDimArray<T>();
+    result.nDims = nDims;
+    result.shape = shape;
+    auto length = nDimArrayLength(result);
+    result.array = static_cast<T *>(malloc(length * sizeof(T)));
+    for (long i = 0; i < length; i++)
+        result.array[i] = fillValue;
+    return result;
 }
