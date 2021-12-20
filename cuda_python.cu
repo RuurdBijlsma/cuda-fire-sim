@@ -3,6 +3,10 @@
 #include <curand.h>
 #include <curand_kernel.h>
 #include <string>
+#include <random>
+#include <chrono>
+
+typedef std::chrono::high_resolution_clock Clock;
 
 //TODO:
 // Remove malloc on repeated Simulations
@@ -44,6 +48,8 @@ __global__ void gpuTick(curandState *randStates,
 
     Cell cell = board[id];
     auto newFuel = cell.fuel - cell.fireActivity * params[Params::burnRate + batchIndex * paramsShape.s0];
+    if(newFuel < 0)
+        newFuel = 0;
 
     const int ns[3] = {-1, 0, 1};
     double activityGrid[8];
@@ -85,7 +91,7 @@ __global__ void gpuTick(curandState *randStates,
             auto wy = windY * yOffset * -1;
             // try to keep windFromNeighbour between 0 and 1
             auto windFromNeighbour =
-                    (wx + wy) / 200 * params[Params::windEffectMultiplier + batchIndex * paramCount];
+                    (wx + wy) / 140 * params[Params::windEffectMultiplier + batchIndex * paramCount];
             activityGrid[dirIndex] *= 1 + windFromNeighbour;
             // ------ HEIGHT ------
             // Same but for height, going down decreases activity spread, going up increases it
@@ -126,18 +132,117 @@ __global__ void gpuTick(curandState *randStates,
     boardCopy[id].landCoverSpreadIndex = cell.landCoverSpreadIndex;
 }
 
+void cpuTick(Cell *board, Cell *boardCopy,
+             const NDimArray<double> landCoverRates,
+             const NDimArray<double> params,
+             const NDimArray<double> weather,
+             const unsigned int batchIndex, const unsigned int x, const unsigned int y
+) {
+    const auto width = weather.shape[0];
+    const auto height = weather.shape[1];
+    const unsigned int id = y * width + x;
+//    auto localRandState = randStates[id];
+
+    Cell cell = board[id];
+    auto newFuel = cell.fuel - cell.fireActivity * params.array[Params::burnRate + batchIndex * params.shape[0]];
+
+    const int ns[3] = {-1, 0, 1};
+    double activityGrid[8];
+    auto dirIndex = -1;
+    // weather[x, y, t, e] t = batch index, e = weather element
+    // e: 0 -> wind U component (horizontal towards east, +x)
+    // e: 1 -> wind V component (vertical towards north, -y)
+    auto windUElement = 0;
+    auto windVElement = 1;
+    auto windX = weather.array[
+            windUElement * weather.shape[0] * weather.shape[1] * weather.shape[2] +
+            batchIndex * weather.shape[0] * weather.shape[1] +
+            y * weather.shape[0] +
+            x
+    ];
+    auto windY = -1 * weather.array[
+            windVElement * weather.shape[0] * weather.shape[1] * weather.shape[2] +
+            batchIndex * weather.shape[0] * weather.shape[1] +
+            y * weather.shape[0] +
+            x
+    ];
+    for (auto xOffset: ns) {
+        for (auto yOffset: ns) {
+            dirIndex++;
+            if (xOffset == 0 && yOffset == 0)
+                continue; // skip current cell because it's not a neighbour
+            // calculate neighbour coordinate
+            auto nX = (int) x + xOffset;
+            auto nY = (int) y + yOffset;
+            if (nX >= width || nY >= height || nX < 0 || nY < 0) {
+                activityGrid[dirIndex] = cell.fireActivity;
+                continue;
+            }
+            auto nI = nY * width + nX;
+            // ------ WIND ------
+            // Fire activity from neighbour cell counts more if wind comes from there
+            activityGrid[dirIndex] = board[nI].fireActivity;
+            auto wx = windX * xOffset * -1;
+            auto wy = windY * yOffset * -1;
+            // try to keep windFromNeighbour between 0 and 1
+            auto windFromNeighbour =
+                    (wx + wy) / 200 * params.array[Params::windEffectMultiplier + batchIndex * paramCount];
+            activityGrid[dirIndex] *= 1 + windFromNeighbour;
+            // ------ HEIGHT ------
+            // Same but for height, going down decreases activity spread, going up increases it
+            double heightDifference = (double) (cell.height - board[nI].height) / 20;
+//             hD > 0 when neighbouring cell is higher than neighbour (fire would spread up)
+//             hD < 0 when neighbouring cell is lower than neighbour (fire would spread down)
+            heightDifference *= heightDifference > 0 ?
+                                params.array[Params::heightEffectMultiplierUp + batchIndex * paramCount] :
+                                params.array[Params::heightEffectMultiplierDown + batchIndex * paramCount];
+            activityGrid[dirIndex] *= 1 + heightDifference;
+        }
+    }
+    double activitySum = 0;
+    for (auto activity: activityGrid)
+        activitySum += activity;
+    auto activity = (activitySum / 8) *
+                    landCoverRates.array[cell.landCoverSpreadIndex + batchIndex * landCoverRates.shape[0]];
+    std::random_device rd;
+    std::mt19937 e2(rd());
+    std::uniform_real_distribution<> dist(0, 1);
+
+    auto newActivity = cell.fireActivity;
+    auto randomNum = dist(e2);
+    auto cellArea = params.array[Params::cellArea + batchIndex * params.shape[0]];
+    auto activityThreshold = params.array[Params::activityThreshold + batchIndex * params.shape[0]];
+    auto areaEffectMultiplier = params.array[Params::areaEffectMultiplier + batchIndex * params.shape[0]];
+    auto fireDeathThreshold = params.array[Params::fireDeathThreshold + batchIndex * params.shape[0]];
+    if (activity > activityThreshold + randomNum / 5) {
+        auto spreadSpeed = params.array[Params::spreadSpeed + batchIndex * params.shape[0]];
+//        // Increase fire activity in current cell
+        newActivity = cell.fuel * activity /
+                      (cellArea / spreadSpeed * areaEffectMultiplier);
+    } else if (activity <= fireDeathThreshold) {
+        auto deathRate = params.array[Params::deathRate + batchIndex * params.shape[0]];
+//        // Reduce fire activity in current cell
+        newActivity /= 1 + (deathRate / (cellArea * areaEffectMultiplier));
+    }
+
+    boardCopy[id].fireActivity = newActivity;
+    boardCopy[id].fuel = newFuel;
+    boardCopy[id].height = cell.height;
+    boardCopy[id].landCoverSpreadIndex = cell.landCoverSpreadIndex;
+}
+
 class Simulation {
 private:
     unsigned int width;
     unsigned int height;
     unsigned int size;
     unsigned int batchIndex;
-    Cell *board;
+    Cell *boardCopy;
     NDimArray<short> landCoverGrid{};
     NDimArray<short> elevation{};
     NDimArray<bool> fire{};
     NDimArray<double> weather{};
-    NDimArray<double> psoConfigs{};
+    NDimArray<double> params{};
     NDimArray<double> landCoverRates{};
 
     NDimArrayShape lcrShape{};
@@ -155,17 +260,17 @@ private:
 public:
     Simulation(unsigned int w, unsigned int h, unsigned int batchIndex, int threads,
                const NDimArray<short> &landCoverGrid,
+               const NDimArray<double> &landCoverRates,
                const NDimArray<short> &elevation,
                const NDimArray<bool> &fire,
                const NDimArray<double> &weather,
-               const NDimArray<double> &params,
-               const NDimArray<double> &landCoverRates) {
+               const NDimArray<double> &params) {
         this->landCoverGrid = landCoverGrid;
+        this->landCoverRates = landCoverRates;
         this->elevation = elevation;
         this->fire = fire;
         this->weather = weather;
-        this->psoConfigs = params;
-        this->landCoverRates = landCoverRates;
+        this->params = params;
         this->lcrShape.s0 = landCoverGrid.shape[0];
         this->lcrShape.s1 = landCoverGrid.shape[1];
         this->paramsShape.s0 = params.shape[0];
@@ -175,12 +280,14 @@ public:
         this->weatherShape.s2 = weather.shape[2];
         this->weatherShape.s3 = weather.shape[3];
 
+
         width = w;
         height = h;
         size = w * h;
         nThreads = threads;
         this->batchIndex = batchIndex;
         board = new Cell[size];
+        boardCopy = new Cell[size];
 
         initBoard();
         initCuda();
@@ -190,22 +297,36 @@ public:
         return size / nThreads + 1;
     }
 
-    void tick(bool print = true) {
-        // Execute on GPU
-        gpuTick<<<gridDim(), nThreads>>>(
-                d_randState, d_board, d_boardCopy,
-                d_landCoverRates, d_params, d_weather,
-                lcrShape, paramsShape, weatherShape,
-                batchIndex
-        );
+    void tick(bool print = true, bool cpu = false) {
+        if (cpu) {
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++)
+                    cpuTick(board, boardCopy, landCoverRates, params, weather, batchIndex, x, y);
+        } else {
+//            setupKernel<<<gridDim(), nThreads>>>(d_randState, rand()); // NOLINT(cert-msc50-cpp)
+            gpuTick<<<gridDim(), nThreads>>>(
+                    d_randState, d_board, d_boardCopy,
+                    d_landCoverRates, d_params, d_weather,
+                    lcrShape, paramsShape, weatherShape,
+                    batchIndex
+            );
+        }
 
         if (print) {
             // Copy data back to CPU
-            cudaCheck(cudaMemcpy(board, d_boardCopy, size * sizeof(Cell), cudaMemcpyDeviceToHost))
+            if (cpu) {
+                board = boardCopy;
+            } else {
+                cudaCheck(cudaMemcpy(board, d_boardCopy, size * sizeof(Cell), cudaMemcpyDeviceToHost))
+            }
             printBoard();
         }
 
-        std::swap(d_board, d_boardCopy);
+        if (cpu) {
+            std::swap(board, boardCopy);
+        } else {
+            std::swap(d_board, d_boardCopy);
+        }
     }
 
     void initBoard() {
@@ -231,10 +352,11 @@ public:
 
         // Init [size] random generators on GPU for each thread
         cudaCheck(cudaMalloc(&d_randState, gridDim() * nThreads * sizeof(curandState)))
-        setupKernel<<<gridDim(), nThreads>>>(d_randState, rand()); // NOLINT(cert-msc50-cpp)
+        auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
+        setupKernel<<<gridDim(), nThreads>>>(d_randState, (int) t); // NOLINT(cert-msc50-cpp)
 
         auto weatherSize = nDimArrayLength(weather) * sizeof(double);
-        auto psoConfigsSize = nDimArrayLength(psoConfigs) * sizeof(double);
+        auto psoConfigsSize = nDimArrayLength(params) * sizeof(double);
         auto landCoverRatesSize = nDimArrayLength(landCoverRates) * sizeof(double);
 
         printf("nDimArrayLength(weather) = %lu\n", nDimArrayLength(weather));
@@ -248,14 +370,16 @@ public:
         // copy board from CPU to GPU
         cudaCheck(cudaMemcpy(d_board, board, size * sizeof(Cell), cudaMemcpyHostToDevice))
         cudaCheck(cudaMemcpy(d_weather, weather.array, weatherSize, cudaMemcpyHostToDevice))
-        cudaCheck(cudaMemcpy(d_params, psoConfigs.array, psoConfigsSize, cudaMemcpyHostToDevice))
+        cudaCheck(cudaMemcpy(d_params, params.array, psoConfigsSize, cudaMemcpyHostToDevice))
         cudaCheck(cudaMemcpy(d_landCoverRates, landCoverRates.array, landCoverRatesSize, cudaMemcpyHostToDevice))
     }
 
-    void printBoard() {
+    void printBoard() const {
         for (int j = 0; j < width * height; j++) {
             auto cell = board[j];
             if (cell.fireActivity <= 0)
+                printf("_ ");
+            else if (cell.fireActivity <= .1)
                 printf(". ");
             else if (cell.fireActivity <= .3)
                 printf("c ");
@@ -273,32 +397,42 @@ public:
         cudaCheck(cudaDeviceSynchronize())
         cudaCheck(cudaDeviceReset())
     }
+
+    Cell *board;
 };
 
-int batchSimulate(NDimArray<short> landCoverGrid,
-                  NDimArray<short> elevation,
-                  NDimArray<bool> fire,
-                  NDimArray<double> weather,
-                  NDimArray<double> psoConfigs,
-                  NDimArray<double> landCoverRates,
-                  double output[]) {
+void batchSimulate(NDimArray<short> landCoverGrid,
+                   NDimArray<double> landCoverRates,
+                   NDimArray<short> elevation,
+                   NDimArray<bool> fire,
+                   NDimArray<double> weather,
+                   NDimArray<double> params,
+                   double output[]) {
     auto width = landCoverGrid.shape[0];
     auto height = landCoverGrid.shape[1];
-    auto batchSize = psoConfigs.shape[1];
+    auto batchSize = params.shape[1];
     auto timeSteps = weather.shape[2];
+
     for (int i = 0; i < batchSize; i++) {
         printf("Iteration %i\n", i);
         auto sim = Simulation(width, height, i, 96,
-                              landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates);
+                              landCoverGrid, landCoverRates, elevation, fire, weather, params);
         sim.printBoard();
         for (int t = 0; t < timeSteps; t++) {
             printf("Tick %i\n", t);
             sim.tick(true);
         }
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                output[i * height * width +
+                       y * width +
+                       x] = sim.board[y * width + x].fireActivity;
+            }
+        }
+
         Simulation::freeCuda();
     }
-
-    return 0;
 }
 
 int main() {
@@ -308,20 +442,20 @@ int main() {
     int checkpoints = 3;
     int weatherElements = 2;
     int psoParams = 10;
-    int batchSize = 1;
+    int batchSize = 2;
     int landCoverTypes = 8;
 
     auto landCoverGrid = createNDimArray<short>(2, new long[2]{width, height}, 1);
     auto landCoverRates = createNDimArray<double>(2, new long[2]{width, height}, 1);
     auto elevation = createNDimArray<short>(2, new long[2]{landCoverTypes, batchSize}, 3);
     auto fire = createNDimArray<bool>(3, new long[3]{width, height, checkpoints}, false);
-    auto weather = createNDimArray<double>(4, new long[4]{width, height, timeSteps, weatherElements}, 20);
+    auto weather = createNDimArray<double>(4, new long[4]{width, height, timeSteps, weatherElements}, 0);
     auto params = createNDimArray<double>(2, new long[2]{psoParams, batchSize}, 1);
 
     fire.array[height / 2 * width + width / 2] = true;
-    fire.array[(height / 2 + 1) * width + width / 2] = true;
-    fire.array[height / 2 * width + width / 2 + 1] = true;
-    fire.array[(height / 2 + 1) * width + width / 2 + 1] = true;
+    fire.array[(height / 2 - 1) * width + width / 2] = true;
+    fire.array[height / 2 * width + width / 2 - 1] = true;
+    fire.array[(height / 2 - 1) * width + width / 2 - 1] = true;
 //    fire.array[1] = true;
 //    fire.array[1 * width + 1] = true;
 //    fire.array[1 * width + 0] = true;
@@ -332,37 +466,37 @@ int main() {
                 weather.array[1 * weather.shape[0] * weather.shape[1] * weather.shape[2] +
                               z * weather.shape[1] * weather.shape[0] +
                               y * weather.shape[0] +
-                              x] = -0;
+                              x] = 0;
             }
         }
     }
 
-    params.array[Params::activityThreshold] = 0.2;
-    params.array[Params::burnRate] = 0.1;
-    params.array[Params::fireDeathThreshold] = 0.1;
-    params.array[Params::deathRate] = 0.2;
-    params.array[Params::areaEffectMultiplier] = 1;
-    params.array[Params::heightEffectMultiplierDown] = 1;
-    params.array[Params::heightEffectMultiplierUp] = 1;
-    params.array[Params::spreadSpeed] = 1.5;
-    params.array[Params::windEffectMultiplier] = 3;
+    for (int b = 0; b < params.shape[1]; b++) {
+        auto s = params.shape[0];
+        params.array[b * s + Params::activityThreshold] = 0.2;
+        params.array[b * s + Params::burnRate] = 0.1;
+        params.array[b * s + Params::fireDeathThreshold] = 0.1;
+        params.array[b * s + Params::deathRate] = 0.2;
+        params.array[b * s + Params::areaEffectMultiplier] = 1;
+        params.array[b * s + Params::heightEffectMultiplierDown] = 1;
+        params.array[b * s + Params::heightEffectMultiplierUp] = 1;
+        params.array[b * s + Params::spreadSpeed] = 1.5;
+        params.array[b * s + Params::windEffectMultiplier] = 3;
+    }
 
 //    printNDimArray(weather, "Weather");
-
-    static double output[2];
-    auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, params, landCoverRates, output);
-    printf("bs output %i\n", temp);
-    printf("output again %f %f\n", output[0], output[1]);
+    static auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
+    batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
 
     return 0;
 }
 
 np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
+                              np::ndarray const &npLandCoverRates,
                               np::ndarray const &npElevation,
                               np::ndarray const &npFire,
                               np::ndarray const &npWeather,
-                              np::ndarray const &npPsoConfigs,
-                              np::ndarray const &npLandCoverRates) {
+                              np::ndarray const &npParams) {
     // Make sure we get right types
     // 2D WxH array, each cell value is index for landCoverRates array
     // 2D WxH array
@@ -377,27 +511,26 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     auto elevation = npToArray<short>(npElevation);
     auto fire = npToArray<bool>(npFire);
     auto weather = npToArray<double>(npWeather);
-    auto psoConfigs = npToArray<double>(npPsoConfigs);
+    auto params = npToArray<double>(npParams);
     auto landCoverRates = npToArray<double>(npLandCoverRates);
 
     printf("Sizeof landCoverGrid = %lu\n", sizeOfNDimArray(landCoverGrid));
     printf("Sizeof elevation = %lu\n", sizeOfNDimArray(elevation));
     printf("Sizeof fire = %lu\n", sizeOfNDimArray(fire));
     printf("Sizeof weather = %lu\n", sizeOfNDimArray(weather));
-    printf("Sizeof psoConfigs = %lu\n", sizeOfNDimArray(psoConfigs));
+    printf("Sizeof params = %lu\n", sizeOfNDimArray(params));
     printf("Sizeof landCoverRates = %lu\n", sizeOfNDimArray(landCoverRates));
 
-    static double output[2];
+    auto batchSize = params.shape[1];
+    auto width = weather.shape[0];
+    auto height = weather.shape[1];
+    static auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
+    batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
 
-    auto temp = batchSimulate(landCoverGrid, elevation, fire, weather, psoConfigs, landCoverRates, output);
-//    auto temp = psoConfigs.array[0];
-//    auto temp = weather.array[0];
-
-    output[0] = temp;
-    output[1] = temp * 12;
     np::dtype dt = np::dtype::get_builtin<double>();
-    p::tuple shape = p::make_tuple(3); // It has shape (2,)
-    p::tuple stride = p::make_tuple(sizeof(double)); // 1D array, so its just size of double
+    p::tuple shape = p::make_tuple(width, height, batchSize);
+    auto sd = sizeof(double);
+    p::tuple stride = p::make_tuple(sd * batchSize * height, sd * batchSize, sd); // 1D array, so its just size of double
     np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
     printf("FINITO\n");
     return result;
