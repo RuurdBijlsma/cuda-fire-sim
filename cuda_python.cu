@@ -361,8 +361,6 @@ public:
         auto psoConfigsSize = nDimArrayLength(params) * sizeof(double);
         auto landCoverRatesSize = nDimArrayLength(landCoverRates) * sizeof(double);
 
-        printf("nDimArrayLength(weather) = %lu\n", nDimArrayLength(weather));
-
         // allocate gpu buffers for board and copy
         cudaCheck(cudaMalloc((void **) &d_board, size * sizeof(Cell)))
         cudaCheck(cudaMalloc((void **) &d_boardCopy, size * sizeof(Cell)))
@@ -395,7 +393,6 @@ public:
     }
 
     static void freeCuda() {
-        printf("Free CUDA\n");
         cudaCheck(cudaDeviceSynchronize())
         cudaCheck(cudaDeviceReset())
     }
@@ -416,12 +413,12 @@ void batchSimulate(NDimArray<short> landCoverGrid,
     auto timeSteps = weather.shape[2];
 
     for (int i = 0; i < batchSize; i++) {
-        printf("Iteration %i\n", i);
+//        printf("Iteration %i\n", i);
         auto sim = Simulation(width, height, i, 96,
                               landCoverGrid, landCoverRates, elevation, fire, weather, params);
 //        sim.printBoard();
         for (int t = 0; t < timeSteps; t++) {
-            printf("Tick %i\n", t);
+//            printf("Tick %i\n", t);
             sim.tick(false);
         }
 
@@ -516,12 +513,12 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     auto params = npToArray<double>(npParams);
     auto landCoverRates = npToArray<double>(npLandCoverRates);
 
-    printf("Sizeof landCoverGrid = %lu\n", sizeOfNDimArray(landCoverGrid));
-    printf("Sizeof elevation = %lu\n", sizeOfNDimArray(elevation));
-    printf("Sizeof fire = %lu\n", sizeOfNDimArray(fire));
-    printf("Sizeof weather = %lu\n", sizeOfNDimArray(weather));
-    printf("Sizeof params = %lu\n", sizeOfNDimArray(params));
-    printf("Sizeof landCoverRates = %lu\n", sizeOfNDimArray(landCoverRates));
+//    printf("Sizeof landCoverGrid = %lu\n", sizeOfNDimArray(landCoverGrid));
+//    printf("Sizeof elevation = %lu\n", sizeOfNDimArray(elevation));
+//    printf("Sizeof fire = %lu\n", sizeOfNDimArray(fire));
+//    printf("Sizeof weather = %lu\n", sizeOfNDimArray(weather));
+//    printf("Sizeof params = %lu\n", sizeOfNDimArray(params));
+//    printf("Sizeof landCoverRates = %lu\n", sizeOfNDimArray(landCoverRates));
 
     auto batchSize = params.shape[1];
     auto width = weather.shape[0];
