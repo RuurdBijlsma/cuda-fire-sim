@@ -48,7 +48,7 @@ __global__ void gpuTick(curandState *randStates,
 
     Cell cell = board[id];
     auto newFuel = cell.fuel - cell.fireActivity * params[Params::burnRate + batchIndex * paramsShape.s0];
-    if(newFuel < 0)
+    if (newFuel < 0)
         newFuel = 0;
 
     const int ns[3] = {-1, 0, 1};
@@ -91,7 +91,7 @@ __global__ void gpuTick(curandState *randStates,
             auto wy = windY * yOffset * -1;
             // try to keep windFromNeighbour between 0 and 1
             auto windFromNeighbour =
-                    (wx + wy) / 140 * params[Params::windEffectMultiplier + batchIndex * paramCount];
+                    (wx + wy) / 60 * params[Params::windEffectMultiplier + batchIndex * paramCount];
             activityGrid[dirIndex] *= 1 + windFromNeighbour;
             // ------ HEIGHT ------
             // Same but for height, going down decreases activity spread, going up increases it
@@ -186,7 +186,7 @@ void cpuTick(Cell *board, Cell *boardCopy,
             auto wy = windY * yOffset * -1;
             // try to keep windFromNeighbour between 0 and 1
             auto windFromNeighbour =
-                    (wx + wy) / 200 * params.array[Params::windEffectMultiplier + batchIndex * paramCount];
+                    (wx + wy) / 60 * params.array[Params::windEffectMultiplier + batchIndex * paramCount];
             activityGrid[dirIndex] *= 1 + windFromNeighbour;
             // ------ HEIGHT ------
             // Same but for height, going down decreases activity spread, going up increases it
@@ -297,7 +297,7 @@ public:
         return size / nThreads + 1;
     }
 
-    void tick(bool print = true, bool cpu = false) {
+    void tick(bool print = false, bool cpu = false) {
         if (cpu) {
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
@@ -320,6 +320,8 @@ public:
                 cudaCheck(cudaMemcpy(board, d_boardCopy, size * sizeof(Cell), cudaMemcpyDeviceToHost))
             }
             printBoard();
+        } else {
+            cudaCheck(cudaMemcpy(board, d_boardCopy, size * sizeof(Cell), cudaMemcpyDeviceToHost))
         }
 
         if (cpu) {
@@ -329,7 +331,7 @@ public:
         }
     }
 
-    void initBoard() {
+    void initBoard() const {
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 auto index = y * width + x;
@@ -417,17 +419,17 @@ void batchSimulate(NDimArray<short> landCoverGrid,
         printf("Iteration %i\n", i);
         auto sim = Simulation(width, height, i, 96,
                               landCoverGrid, landCoverRates, elevation, fire, weather, params);
-        sim.printBoard();
+//        sim.printBoard();
         for (int t = 0; t < timeSteps; t++) {
             printf("Tick %i\n", t);
-            sim.tick(true);
+            sim.tick(false);
         }
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 output[i * height * width +
                        y * width +
-                       x] = sim.board[y * width + x].fireActivity;
+                       x] = sim.board[y * width + x].fuel;
             }
         }
 
@@ -527,10 +529,14 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     static auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
     batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
 
+//    auto debug = createNDimArray<double>(3, new long[3]{width, height, batchSize}, 0);
+//    debug.array = output;
+//    printNDimArray(debug);
+
     np::dtype dt = np::dtype::get_builtin<double>();
     p::tuple shape = p::make_tuple(width, height, batchSize);
     auto sd = sizeof(double);
-    p::tuple stride = p::make_tuple(sd * batchSize * height, sd * batchSize, sd); // 1D array, so its just size of double
+    p::tuple stride = p::make_tuple(sd, sd * width, sd * height * width);
     np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
     printf("FINITO\n");
     return result;
