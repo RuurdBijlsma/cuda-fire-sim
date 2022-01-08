@@ -72,6 +72,10 @@ unsigned long getOffset(int nDims, const long *strides, const long *indices, con
     return offset;
 }
 
+template<typename T>
+void freeNDArray(NDimArray<T> nDimArray){
+    free(nDimArray.array);
+}
 
 template<typename T>
 NDimArray<T> npToArray(const np::ndarray &npArray) {

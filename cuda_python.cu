@@ -258,6 +258,8 @@ private:
     int nThreads;
 
 public:
+    Cell *board;
+
     Simulation(unsigned int w, unsigned int h, unsigned int batchIndex, int threads,
                const NDimArray<short> &landCoverGrid,
                const NDimArray<double> &landCoverRates,
@@ -291,6 +293,11 @@ public:
 
         initBoard();
         initCuda();
+    }
+
+    ~Simulation() {
+        delete[] board;
+        delete[] boardCopy;
     }
 
     [[nodiscard]] unsigned int gridDim() const {
@@ -396,8 +403,6 @@ public:
         cudaCheck(cudaDeviceSynchronize())
         cudaCheck(cudaDeviceReset())
     }
-
-    Cell *board;
 };
 
 void batchSimulate(NDimArray<short> landCoverGrid,
@@ -484,8 +489,15 @@ int main() {
     }
 
 //    printNDimArray(weather, "Weather");
-    static auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
+    auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
     batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
+    free(output);
+    freeNDArray(landCoverGrid);
+    freeNDArray(landCoverRates);
+    freeNDArray(elevation);
+    freeNDArray(fire);
+    freeNDArray(weather);
+    freeNDArray(params);
 
     return 0;
 }
@@ -507,11 +519,11 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     printf("STARTING C++ ENGINES\n");
 
     auto landCoverGrid = npToArray<short>(npLandCoverGrid);
+    auto landCoverRates = npToArray<double>(npLandCoverRates);
     auto elevation = npToArray<short>(npElevation);
     auto fire = npToArray<bool>(npFire);
     auto weather = npToArray<double>(npWeather);
     auto params = npToArray<double>(npParams);
-    auto landCoverRates = npToArray<double>(npLandCoverRates);
 
 //    printf("Sizeof landCoverGrid = %lu\n", sizeOfNDimArray(landCoverGrid));
 //    printf("Sizeof elevation = %lu\n", sizeOfNDimArray(elevation));
@@ -536,6 +548,14 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     p::tuple stride = p::make_tuple(sd, sd * width, sd * height * width);
     np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
     printf("FINITO\n");
+
+    freeNDArray(landCoverGrid);
+    freeNDArray(landCoverRates);
+    freeNDArray(elevation);
+    freeNDArray(fire);
+    freeNDArray(weather);
+    freeNDArray(params);
+
     return result;
 }
 
