@@ -73,11 +73,6 @@ unsigned long getOffset(int nDims, const long *strides, const long *indices, con
 }
 
 template<typename T>
-void freeNDArray(NDimArray<T> nDimArray){
-    free(nDimArray.array);
-}
-
-template<typename T>
 NDimArray<T> npToArray(const np::ndarray &npArray) {
     if (npArray.get_dtype() != np::dtype::get_builtin<T>()) {
         PyErr_SetString(PyExc_TypeError, "Incorrect data type for np array");

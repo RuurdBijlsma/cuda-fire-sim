@@ -296,8 +296,14 @@ public:
     }
 
     ~Simulation() {
-        delete[] board;
-        delete[] boardCopy;
+        if (board != nullptr) {
+            delete[] board;
+            board = nullptr;
+        }
+        if (boardCopy != nullptr) {
+            delete[] boardCopy;
+            boardCopy = nullptr;
+        }
     }
 
     [[nodiscard]] unsigned int gridDim() const {
@@ -440,14 +446,14 @@ void batchSimulate(NDimArray<short> landCoverGrid,
 }
 
 int main() {
-    int width = 10;
-    int height = 8;
-    int timeSteps = 20;
-    int checkpoints = 3;
-    int weatherElements = 2;
-    int psoParams = 10;
-    int batchSize = 2;
-    int landCoverTypes = 8;
+    int width = 38;
+    int height = 38;
+    int timeSteps = 72;
+    int checkpoints = 10;
+    int weatherElements = 8;
+    int psoParams = 15;
+    int batchSize = 3;
+    int landCoverTypes = 25;
 
     auto landCoverGrid = createNDimArray<short>(2, new long[2]{width, height}, 1);
     auto landCoverRates = createNDimArray<double>(2, new long[2]{width, height}, 1);
@@ -492,12 +498,30 @@ int main() {
     auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
     batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
     free(output);
-    freeNDArray(landCoverGrid);
-    freeNDArray(landCoverRates);
-    freeNDArray(elevation);
-    freeNDArray(fire);
-    freeNDArray(weather);
-    freeNDArray(params);
+    if (landCoverGrid.array != nullptr) {
+        free(landCoverGrid.array);
+        landCoverGrid.array = nullptr;
+    }
+    if (landCoverRates.array != nullptr) {
+        free(landCoverRates.array);
+        landCoverRates.array = nullptr;
+    }
+    if (elevation.array != nullptr) {
+        free(elevation.array);
+        elevation.array = nullptr;
+    }
+    if (fire.array != nullptr) {
+        free(fire.array);
+        fire.array = nullptr;
+    }
+    if (weather.array != nullptr) {
+        free(weather.array);
+        weather.array = nullptr;
+    }
+    if (params.array != nullptr) {
+        free(params.array);
+        params.array = nullptr;
+    }
 
     return 0;
 }
@@ -516,8 +540,6 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     // 2D PxN array P is params count, N is batch size
     // 2D LxN array L is land cover type count, N is batch size
 
-    printf("STARTING C++ ENGINES\n");
-
     auto landCoverGrid = npToArray<short>(npLandCoverGrid);
     auto landCoverRates = npToArray<double>(npLandCoverRates);
     auto elevation = npToArray<short>(npElevation);
@@ -535,7 +557,7 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     auto batchSize = params.shape[1];
     auto width = weather.shape[0];
     auto height = weather.shape[1];
-    static auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
+    auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
     batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
 
 //    auto debug = createNDimArray<double>(3, new long[3]{width, height, batchSize}, 0);
@@ -547,14 +569,31 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     auto sd = sizeof(double);
     p::tuple stride = p::make_tuple(sd, sd * width, sd * height * width);
     np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
-    printf("FINITO\n");
 
-    freeNDArray(landCoverGrid);
-    freeNDArray(landCoverRates);
-    freeNDArray(elevation);
-    freeNDArray(fire);
-    freeNDArray(weather);
-    freeNDArray(params);
+    if (landCoverGrid.array != nullptr) {
+        free(landCoverGrid.array);
+        landCoverGrid.array = nullptr;
+    }
+    if (landCoverRates.array != nullptr) {
+        free(landCoverRates.array);
+        landCoverRates.array = nullptr;
+    }
+    if (elevation.array != nullptr) {
+        free(elevation.array);
+        elevation.array = nullptr;
+    }
+    if (fire.array != nullptr) {
+        free(fire.array);
+        fire.array = nullptr;
+    }
+    if (weather.array != nullptr) {
+        free(weather.array);
+        weather.array = nullptr;
+    }
+    if (params.array != nullptr) {
+        free(params.array);
+        params.array = nullptr;
+    }
 
     return result;
 }
