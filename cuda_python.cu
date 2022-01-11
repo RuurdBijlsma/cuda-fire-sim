@@ -430,7 +430,7 @@ void batchSimulate(NDimArray<short> landCoverGrid,
 //        sim.printBoard();
         for (int t = 0; t < timeSteps; t++) {
 //            printf("Tick %i\n", t);
-            sim.tick(false);
+            sim.tick(false, false);
         }
 
         for (int y = 0; y < height; y++) {
@@ -446,83 +446,95 @@ void batchSimulate(NDimArray<short> landCoverGrid,
 }
 
 int main() {
-    int width = 38;
-    int height = 38;
-    int timeSteps = 72;
-    int checkpoints = 10;
-    int weatherElements = 8;
-    int psoParams = 15;
-    int batchSize = 3;
-    int landCoverTypes = 25;
+    for (int size = 2; size < 1000; size += 20) {
+        printf("SIZE = %d\n", size);
+        int width = size;
+        int height = size;
+        int timeSteps = 72;
+        int checkpoints = 10;
+        int weatherElements = 2;
+        int psoParams = 10;
+        int batchSize = 1;
+        int landCoverTypes = 47;
 
-    auto landCoverGrid = createNDimArray<short>(2, new long[2]{width, height}, 1);
-    auto landCoverRates = createNDimArray<double>(2, new long[2]{width, height}, 1);
-    auto elevation = createNDimArray<short>(2, new long[2]{landCoverTypes, batchSize}, 3);
-    auto fire = createNDimArray<bool>(3, new long[3]{width, height, checkpoints}, false);
-    auto weather = createNDimArray<double>(4, new long[4]{width, height, timeSteps, weatherElements}, 0);
-    auto params = createNDimArray<double>(2, new long[2]{psoParams, batchSize}, 1);
+        auto landCoverGrid = createNDimArray<short>(2, new long[2]{width, height}, 1);
+        auto landCoverRates = createNDimArray<double>(2, new long[2]{width, height}, 1);
+        auto elevation = createNDimArray<short>(2, new long[2]{landCoverTypes, batchSize}, 3);
+        auto fire = createNDimArray<bool>(3, new long[3]{width, height, checkpoints}, false);
+        auto weather = createNDimArray<double>(4, new long[4]{width, height, timeSteps, weatherElements}, 0);
+        auto params = createNDimArray<double>(2, new long[2]{psoParams, batchSize}, 1);
 
-    fire.array[height / 2 * width + width / 2] = true;
-    fire.array[(height / 2 - 1) * width + width / 2] = true;
-    fire.array[height / 2 * width + width / 2 - 1] = true;
-    fire.array[(height / 2 - 1) * width + width / 2 - 1] = true;
-//    fire.array[1] = true;
-//    fire.array[1 * width + 1] = true;
-//    fire.array[1 * width + 0] = true;
+        fire.array[height / 2 * width + width / 2] = true;
+        fire.array[(height / 2 - 1) * width + width / 2] = true;
+        fire.array[height / 2 * width + width / 2 - 1] = true;
+        fire.array[(height / 2 - 1) * width + width / 2 - 1] = true;
+        //    fire.array[1] = true;
+        //    fire.array[1 * width + 1] = true;
+        //    fire.array[1 * width + 0] = true;
 
-    for (int x = 0; x < weather.shape[0]; x++) {
-        for (int y = 0; y < weather.shape[1]; y++) {
-            for (int z = 0; z < weather.shape[2]; z++) {
-                weather.array[1 * weather.shape[0] * weather.shape[1] * weather.shape[2] +
-                              z * weather.shape[1] * weather.shape[0] +
-                              y * weather.shape[0] +
-                              x] = 0;
+        for (int x = 0; x < weather.shape[0]; x++) {
+            for (int y = 0; y < weather.shape[1]; y++) {
+                for (int z = 0; z < weather.shape[2]; z++) {
+                    weather.array[1 * weather.shape[0] * weather.shape[1] * weather.shape[2] +
+                                  z * weather.shape[1] * weather.shape[0] +
+                                  y * weather.shape[0] +
+                                  x] = 0;
+                }
             }
         }
-    }
 
-    for (int b = 0; b < params.shape[1]; b++) {
-        auto s = params.shape[0];
-        params.array[b * s + Params::activityThreshold] = 0.2;
-        params.array[b * s + Params::burnRate] = 0.1;
-        params.array[b * s + Params::fireDeathThreshold] = 0.1;
-        params.array[b * s + Params::deathRate] = 0.2;
-        params.array[b * s + Params::areaEffectMultiplier] = 1;
-        params.array[b * s + Params::heightEffectMultiplierDown] = 1;
-        params.array[b * s + Params::heightEffectMultiplierUp] = 1;
-        params.array[b * s + Params::spreadSpeed] = 1.5;
-        params.array[b * s + Params::windEffectMultiplier] = 3;
-    }
+        for (int b = 0; b < params.shape[1]; b++) {
+            auto s = params.shape[0];
+            params.array[b * s + Params::activityThreshold] = 0.2;
+            params.array[b * s + Params::burnRate] = 0.1;
+            params.array[b * s + Params::fireDeathThreshold] = 0.1;
+            params.array[b * s + Params::deathRate] = 0.2;
+            params.array[b * s + Params::areaEffectMultiplier] = 1;
+            params.array[b * s + Params::heightEffectMultiplierDown] = 1;
+            params.array[b * s + Params::heightEffectMultiplierUp] = 1;
+            params.array[b * s + Params::spreadSpeed] = 1.5;
+            params.array[b * s + Params::windEffectMultiplier] = 3;
+        }
 
 //    printNDimArray(weather, "Weather");
-    auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
-    batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
-    free(output);
-    if (landCoverGrid.array != nullptr) {
-        free(landCoverGrid.array);
-        landCoverGrid.array = nullptr;
-    }
-    if (landCoverRates.array != nullptr) {
-        free(landCoverRates.array);
-        landCoverRates.array = nullptr;
-    }
-    if (elevation.array != nullptr) {
-        free(elevation.array);
-        elevation.array = nullptr;
-    }
-    if (fire.array != nullptr) {
-        free(fire.array);
-        fire.array = nullptr;
-    }
-    if (weather.array != nullptr) {
-        free(weather.array);
-        weather.array = nullptr;
-    }
-    if (params.array != nullptr) {
-        free(params.array);
-        params.array = nullptr;
-    }
+        auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
 
+        int iterations = 7;
+        for (int i = 0; i < iterations; i++) {
+            auto start = std::chrono::high_resolution_clock::now();
+            batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
+            auto stop = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+            printf("%ld\n", duration.count());
+        }
+
+        free(output);
+        if (landCoverGrid.array != nullptr) {
+            free(landCoverGrid.array);
+            landCoverGrid.array = nullptr;
+        }
+        if (landCoverRates.array != nullptr) {
+            free(landCoverRates.array);
+            landCoverRates.array = nullptr;
+        }
+        if (elevation.array != nullptr) {
+            free(elevation.array);
+            elevation.array = nullptr;
+        }
+        if (fire.array != nullptr) {
+            free(fire.array);
+            fire.array = nullptr;
+        }
+        if (weather.array != nullptr) {
+            free(weather.array);
+            weather.array = nullptr;
+        }
+        if (params.array != nullptr) {
+            free(params.array);
+            params.array = nullptr;
+        }
+
+    }
     return 0;
 }
 
