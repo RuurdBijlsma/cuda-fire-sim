@@ -8,9 +8,29 @@
 
 typedef std::chrono::high_resolution_clock Clock;
 
+void charArrToImage(unsigned char *charArr, int width, int height, const std::string &outputFile) {
+    int length = width * height * 3;
+
+    printf("Hello world!");
+
+    FILE *imageFile;
+
+    imageFile = fopen(outputFile.c_str(), "wb");
+    if (imageFile == nullptr) {
+        perror("ERROR: Cannot open output file");
+        exit(EXIT_FAILURE);
+    }
+
+    fprintf(imageFile, "P6\n"); // P6 filetype
+    fprintf(imageFile, "%d %d\n", width, height); // dimensions
+    fprintf(imageFile, "255\n"); // Max pixel
+
+    fwrite(charArr, 1, length, imageFile);
+    fclose(imageFile);
+}
+
 //TODO:
 // Remove malloc on repeated Simulations
-// add weather
 
 #define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
@@ -544,6 +564,15 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
                               np::ndarray const &npFire,
                               np::ndarray const &npWeather,
                               np::ndarray const &npParams) {
+
+    unsigned char pix[] = {200, 200, 200,
+                           100, 100, 100,
+                           0, 0, 0,
+                           255, 0, 0,
+                           0, 255, 0,
+                           0, 0, 255};
+    charArrToImage(pix, 3, 2, "hello.ppm");
+
     // Make sure we get right types
     // 2D WxH array, each cell value is index for landCoverRates array
     // 2D WxH array
