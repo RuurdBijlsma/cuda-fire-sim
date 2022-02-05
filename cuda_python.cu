@@ -8,8 +8,8 @@
 
 typedef std::chrono::high_resolution_clock Clock;
 
-void charArrToImage(unsigned char *charArr, int width, int height, const std::string &outputFile) {
-    int length = width * height * 3;
+void charArrToImage(unsigned char *charArr, unsigned int width, unsigned int height, const std::string &outputFile) {
+    unsigned int length = width * height * 3;
 
     printf("Hello world!");
 
@@ -330,7 +330,7 @@ public:
         return size / nThreads + 1;
     }
 
-    void tick(bool print = false, bool cpu = false) {
+    void tick(int tickIndex, bool print = false, bool cpu = false) {
         if (cpu) {
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
@@ -356,6 +356,7 @@ public:
         } else {
             cudaCheck(cudaMemcpy(board, d_boardCopy, size * sizeof(Cell), cudaMemcpyDeviceToHost))
         }
+        boardToImage(tickIndex);
 
         if (cpu) {
             std::swap(board, boardCopy);
@@ -407,6 +408,19 @@ public:
         cudaCheck(cudaMemcpy(d_landCoverRates, landCoverRates.array, landCoverRatesSize, cudaMemcpyHostToDevice))
     }
 
+    void boardToImage(int tickIndex) const {
+        auto *pix = static_cast<unsigned char *>(malloc(width * height * 3));
+
+        for (int j = 0; j < width * height; j++) {
+            pix[j] = static_cast<unsigned char>(board[j].fireActivity * 255);
+            pix[j + 1] = static_cast<unsigned char>(board[j].fuel * 255);
+            pix[j + 2] = 0;
+        }
+
+        printf("Exporting board to image");
+        charArrToImage(pix, width, height, "board" + std::to_string(tickIndex) + ".ppm");
+    }
+
     void printBoard() const {
         for (int j = 0; j < width * height; j++) {
             auto cell = board[j];
@@ -450,7 +464,7 @@ void batchSimulate(NDimArray<short> landCoverGrid,
 //        sim.printBoard();
         for (int t = 0; t < timeSteps; t++) {
 //            printf("Tick %i\n", t);
-            sim.tick(false, false);
+            sim.tick(t, false, false);
         }
 
         for (int y = 0; y < height; y++) {
