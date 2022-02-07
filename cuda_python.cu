@@ -570,7 +570,7 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
     // lcg:         2D WxH short array,     each cell value is index for landCoverRates array
     // lcr:         2D LxN double array     L is land cover type count, N is batch size
     // elevation:   2D WxH short array
-    // fire:        3D WxH bool array
+    // fire:        2D WxH bool array
     // weather:     4D WxHxTxE double       array T is time steps. E is elements size (wind X, wind Y)
     // params:      2D PxN double array     P is params count, N is batch size
 
