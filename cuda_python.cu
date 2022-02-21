@@ -54,7 +54,7 @@ __global__ void gpuTick(curandState *randStates,
     const int ns[3] = {-1, 0, 1};
     double activityGrid[8];
     auto dirIndex = -1;
-    // weather[x, y, t, e] t = batch index, e = weather element
+    // weather[x, y, t, e], t = batch index, e = weather element
     // e: 0 -> wind U component (horizontal towards east, +x)
     // e: 1 -> wind V component (vertical towards north, -y)
     auto windUElement = 0;
