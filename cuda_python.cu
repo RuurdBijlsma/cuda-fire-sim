@@ -1,5 +1,5 @@
 #include "main.h"
-#include "pythonHelpers.h"
+#include "helpers.h"
 #include <curand.h>
 #include <curand_kernel.h>
 #include <string>
@@ -10,7 +10,6 @@ typedef std::chrono::high_resolution_clock Clock;
 
 //TODO:
 // Remove malloc on repeated Simulations
-// add weather
 
 #define cudaCheck(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
@@ -258,6 +257,8 @@ private:
     int nThreads;
 
 public:
+    Cell *board;
+
     Simulation(unsigned int w, unsigned int h, unsigned int batchIndex, int threads,
                const NDimArray<short> &landCoverGrid,
                const NDimArray<double> &landCoverRates,
@@ -293,11 +294,22 @@ public:
         initCuda();
     }
 
+    ~Simulation() {
+        if (board != nullptr) {
+            delete[] board;
+            board = nullptr;
+        }
+        if (boardCopy != nullptr) {
+            delete[] boardCopy;
+            boardCopy = nullptr;
+        }
+    }
+
     [[nodiscard]] unsigned int gridDim() const {
         return size / nThreads + 1;
     }
 
-    void tick(bool print = false, bool cpu = false) {
+    void tick(int tickIndex, bool print = false, bool cpu = false) {
         if (cpu) {
             for (int y = 0; y < height; y++)
                 for (int x = 0; x < width; x++)
@@ -323,6 +335,7 @@ public:
         } else {
             cudaCheck(cudaMemcpy(board, d_boardCopy, size * sizeof(Cell), cudaMemcpyDeviceToHost))
         }
+//        boardToImage(tickIndex);
 
         if (cpu) {
             std::swap(board, boardCopy);
@@ -374,6 +387,21 @@ public:
         cudaCheck(cudaMemcpy(d_landCoverRates, landCoverRates.array, landCoverRatesSize, cudaMemcpyHostToDevice))
     }
 
+    void boardToImage(int tickIndex) const {
+        auto *pix = static_cast<unsigned char *>(malloc(width * height * 3));
+
+        for (int i = 0; i < width * height; i++) {
+            int pixI = i * 3;
+            pix[pixI] = static_cast<unsigned char>(board[i].fireActivity * 255);
+            pix[pixI + 1] = static_cast<unsigned char>(board[i].fuel * 255);
+            pix[pixI + 2] = 0;
+        }
+
+//        printf("Exporting board to image\n");
+        charArrToImage(pix, width, height, "board" + std::to_string(tickIndex));
+        free(pix);
+    }
+
     void printBoard() const {
         for (int j = 0; j < width * height; j++) {
             auto cell = board[j];
@@ -396,8 +424,6 @@ public:
         cudaCheck(cudaDeviceSynchronize())
         cudaCheck(cudaDeviceReset())
     }
-
-    Cell *board;
 };
 
 void batchSimulate(NDimArray<short> landCoverGrid,
@@ -419,7 +445,7 @@ void batchSimulate(NDimArray<short> landCoverGrid,
 //        sim.printBoard();
         for (int t = 0; t < timeSteps; t++) {
 //            printf("Tick %i\n", t);
-            sim.tick(false);
+            sim.tick(t, false, false);
         }
 
         for (int y = 0; y < height; y++) {
@@ -435,14 +461,16 @@ void batchSimulate(NDimArray<short> landCoverGrid,
 }
 
 int main() {
-    int width = 10;
-    int height = 8;
-    int timeSteps = 20;
-    int checkpoints = 3;
+    int size = 100;
+    printf("SIZE = %d\n", size);
+    int width = size;
+    int height = size;
+    int timeSteps = 72;
+    int checkpoints = 10;
     int weatherElements = 2;
     int psoParams = 10;
-    int batchSize = 2;
-    int landCoverTypes = 8;
+    int batchSize = 1;
+    int landCoverTypes = 47;
 
     auto landCoverGrid = createNDimArray<short>(2, new long[2]{width, height}, 1);
     auto landCoverRates = createNDimArray<double>(2, new long[2]{width, height}, 1);
@@ -455,9 +483,9 @@ int main() {
     fire.array[(height / 2 - 1) * width + width / 2] = true;
     fire.array[height / 2 * width + width / 2 - 1] = true;
     fire.array[(height / 2 - 1) * width + width / 2 - 1] = true;
-//    fire.array[1] = true;
-//    fire.array[1 * width + 1] = true;
-//    fire.array[1 * width + 0] = true;
+    //    fire.array[1] = true;
+    //    fire.array[1 * width + 1] = true;
+    //    fire.array[1 * width + 0] = true;
 
     for (int x = 0; x < weather.shape[0]; x++) {
         for (int y = 0; y < weather.shape[1]; y++) {
@@ -484,9 +512,50 @@ int main() {
     }
 
 //    printNDimArray(weather, "Weather");
-    static auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
-    batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
+    auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
 
+    int simTicks = 50;
+    int avgRepeats = 10;
+    for (int threadCount = 12; threadCount < 512; threadCount += 12) {
+        long sum = 0;
+        for (int i = 0; i < avgRepeats; i++) {
+            auto sim = Simulation(width, height, 0, threadCount, landCoverGrid, landCoverRates, elevation, fire,
+                                  weather, params);
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int j = 0; j < simTicks; j++) {
+                sim.tick(0);
+            }
+            auto stop = std::chrono::high_resolution_clock::now();
+            sum += std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count();
+        }
+        printf("%d %ld\n", threadCount, sum / avgRepeats);
+    }
+
+    free(output);
+    if (landCoverGrid.array != nullptr) {
+        free(landCoverGrid.array);
+        landCoverGrid.array = nullptr;
+    }
+    if (landCoverRates.array != nullptr) {
+        free(landCoverRates.array);
+        landCoverRates.array = nullptr;
+    }
+    if (elevation.array != nullptr) {
+        free(elevation.array);
+        elevation.array = nullptr;
+    }
+    if (fire.array != nullptr) {
+        free(fire.array);
+        fire.array = nullptr;
+    }
+    if (weather.array != nullptr) {
+        free(weather.array);
+        weather.array = nullptr;
+    }
+    if (params.array != nullptr) {
+        free(params.array);
+        params.array = nullptr;
+    }
     return 0;
 }
 
@@ -496,46 +565,59 @@ np::ndarray wrapBatchSimulate(np::ndarray const &npLandCoverGrid,
                               np::ndarray const &npFire,
                               np::ndarray const &npWeather,
                               np::ndarray const &npParams) {
-    // Make sure we get right types
-    // 2D WxH array, each cell value is index for landCoverRates array
-    // 2D WxH array
-    // 3D WxHxC array C is fire checkpoint steps count
-    // 4D WxHxTxE array T is time steps. E is elements size (wind X, wind Y)
-    // 2D PxN array P is params count, N is batch size
-    // 2D LxN array L is land cover type count, N is batch size
 
-    printf("STARTING C++ ENGINES\n");
+    // Make sure we get right types
+    // lcg:         2D WxH short array,     each cell value is index for landCoverRates array
+    // lcr:         2D LxN double array     L is land cover type count, N is batch size
+    // elevation:   2D WxH short array
+    // fire:        2D WxH bool array
+    // weather:     4D WxHxTxE double       array T is time steps. E is elements size (wind X, wind Y)
+    // params:      2D PxN double array     P is params count, N is batch size
 
     auto landCoverGrid = npToArray<short>(npLandCoverGrid);
+    auto landCoverRates = npToArray<double>(npLandCoverRates);
     auto elevation = npToArray<short>(npElevation);
     auto fire = npToArray<bool>(npFire);
     auto weather = npToArray<double>(npWeather);
     auto params = npToArray<double>(npParams);
-    auto landCoverRates = npToArray<double>(npLandCoverRates);
-
-//    printf("Sizeof landCoverGrid = %lu\n", sizeOfNDimArray(landCoverGrid));
-//    printf("Sizeof elevation = %lu\n", sizeOfNDimArray(elevation));
-//    printf("Sizeof fire = %lu\n", sizeOfNDimArray(fire));
-//    printf("Sizeof weather = %lu\n", sizeOfNDimArray(weather));
-//    printf("Sizeof params = %lu\n", sizeOfNDimArray(params));
-//    printf("Sizeof landCoverRates = %lu\n", sizeOfNDimArray(landCoverRates));
 
     auto batchSize = params.shape[1];
     auto width = weather.shape[0];
     auto height = weather.shape[1];
-    static auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
+    auto *output = static_cast<double *>(malloc(batchSize * width * height * sizeof(double)));
     batchSimulate(landCoverGrid, landCoverRates, elevation, fire, weather, params, output);
-
-//    auto debug = createNDimArray<double>(3, new long[3]{width, height, batchSize}, 0);
-//    debug.array = output;
-//    printNDimArray(debug);
 
     np::dtype dt = np::dtype::get_builtin<double>();
     p::tuple shape = p::make_tuple(width, height, batchSize);
     auto sd = sizeof(double);
     p::tuple stride = p::make_tuple(sd, sd * width, sd * height * width);
     np::ndarray result = np::from_data(output, dt, shape, stride, p::object());
-    printf("FINITO\n");
+
+    if (landCoverGrid.array != nullptr) {
+        free(landCoverGrid.array);
+        landCoverGrid.array = nullptr;
+    }
+    if (landCoverRates.array != nullptr) {
+        free(landCoverRates.array);
+        landCoverRates.array = nullptr;
+    }
+    if (elevation.array != nullptr) {
+        free(elevation.array);
+        elevation.array = nullptr;
+    }
+    if (fire.array != nullptr) {
+        free(fire.array);
+        fire.array = nullptr;
+    }
+    if (weather.array != nullptr) {
+        free(weather.array);
+        weather.array = nullptr;
+    }
+    if (params.array != nullptr) {
+        free(params.array);
+        params.array = nullptr;
+    }
+
     return result;
 }
 
@@ -543,5 +625,5 @@ BOOST_PYTHON_MODULE (cuda_python) {  // Thing in brackets should match output li
     Py_Initialize();
     np::initialize();
     p::def("batch_simulate", wrapBatchSimulate);
-//    p::def("find_best_thread_count", findBestThreadCount);
+    p::def("main", main);
 }
